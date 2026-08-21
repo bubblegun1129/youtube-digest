@@ -19,48 +19,51 @@ function loadContentHelpers() {
       createElement: () => ({ style: {}, addEventListener() {} }),
     },
     window: {
-      location: { pathname: "/watch" },
+      location: { pathname: "/blog" },
       addEventListener() {},
-      getComputedStyle: () => ({ display: "flex", visibility: "visible" }),
     },
     chrome: {
       runtime: {
-        onMessage: { addListener() {} },
         async sendMessage() {
           return { success: true };
         },
       },
     },
-    MutationObserver: class {
-      observe() {}
-    },
     setTimeout() {
       return 1;
     },
     clearTimeout() {},
-    setInterval() {
-      return 1;
-    },
-    clearInterval() {},
   };
   sandbox.globalThis = sandbox;
-  vm.runInNewContext(read("content.js"), sandbox);
+  vm.runInNewContext(read("selection-translate.js"), sandbox);
   return sandbox.__YTD_SELECTION_TRANSLATION_TESTING__;
 }
 
 test("page selection translation is wired through the content script and background", () => {
+  const selectionScript = read("selection-translate.js");
   const content = read("content.js");
   const background = read("background.js");
   const sidepanel = read("sidepanel.js");
+  const manifest = JSON.parse(read("manifest.json"));
 
-  assert.match(content, /setupSelectionTranslation\(\)/);
-  assert.match(content, /action: "translateSelection"/);
-  assert.match(content, /ytd-selection-translator/);
-  assert.match(content, /attachShadow\(\{ mode: "open" \}\)/);
+  assert.doesNotMatch(content, /action: "translateSelection"/);
+  assert.match(selectionScript, /setupSelectionTranslation\(\)/);
+  assert.match(selectionScript, /action: "translateSelection"/);
+  assert.match(selectionScript, /pageTitle: getPageTitle\(\)/);
+  assert.match(selectionScript, /ytd-selection-translator/);
+  assert.match(selectionScript, /attachShadow\(\{ mode: "open" \}\)/);
+  assert.doesNotMatch(selectionScript, /pathname\.includes\("\/watch"\)/);
   assert.match(background, /message\.action === "translateSelection"/);
   assert.match(background, /async function handleTranslateSelection\(/);
   assert.match(sidepanel, /selection-translation-card/);
   assert.match(sidepanel, /action: "translateSelection"/);
+  assert.ok(
+    manifest.content_scripts.some(
+      (script) =>
+        (script.js || []).includes("selection-translate.js") &&
+        (script.matches || []).includes("https://*/*"),
+    ),
+  );
 });
 
 test("page selection helper ignores empty, punctuation-only, editable, and oversized text", () => {

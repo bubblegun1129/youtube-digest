@@ -16,8 +16,16 @@ test("manifest uses minimized install-time permissions", () => {
   assert.equal(manifest.options_ui.page, "options.html");
   assert.ok(!manifest.permissions.includes("activeTab"));
   assert.ok(manifest.host_permissions.includes("https://api.deepseek.com/*"));
+  assert.ok(!manifest.host_permissions.includes("<all_urls>"));
+  assert.ok(!manifest.host_permissions.includes("https://*/*"));
   assert.equal(Object.hasOwn(manifest, "optional_host_permissions"), false);
   assert.equal(manifest.version, "1.1.6");
+  const selectionScript = manifest.content_scripts.find((script) =>
+    (script.js || []).includes("selection-translate.js"),
+  );
+  assert.ok(selectionScript, "selection translation must be a content script");
+  assert.ok(selectionScript.matches.includes("http://*/*"));
+  assert.ok(selectionScript.matches.includes("https://*/*"));
 });
 
 test("release copy documents current scope without em dashes", () => {
@@ -117,6 +125,8 @@ test("release copy documents current scope without em dashes", () => {
     chineseReadme,
     /^### YouTube 视频页面没有显示 Digest 按钮$/m,
   );
+  assert.match(readme, /ordinary http\(s\) webpages/);
+  assert.match(chineseReadme, /普通 http\(s\) 网页/);
 
   const optionsPage = read("options.html");
   const optionsStyles = read("options.css");

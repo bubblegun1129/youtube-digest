@@ -45,12 +45,12 @@ The video is titled "{videoTitle}". Use the title and neighboring segments only 
 
 ## Selection translation
 
-Used when the user selects text on a YouTube watch page or in the side
-panel. Input is a single selected string, not a transcript batch.
+Used when the user selects text on a webpage or in the side panel. Input is a
+single selected string, not a transcript batch.
 
 ```
 You are a professional translator. Translate the selected text into {langName}.
-The surrounding page is a YouTube video titled "{videoTitle}". Use the title only as context for names, pronouns, terminology, and the speaker's intended meaning.
+The surrounding page is titled "{pageTitle}". Use the title only as context for names, pronouns, terminology, and intended meaning.
 
 {baseRules}
 
@@ -66,3 +66,4 @@ The surrounding page is a YouTube video titled "{videoTitle}". Use the title onl
 - `{baseRules}` — the shared base rules above.
 - `{langSpecific}` — the Chinese rules inserted into the shared base rules.
 - `{videoTitle}` — video title.
+- `{pageTitle}` — current page title.

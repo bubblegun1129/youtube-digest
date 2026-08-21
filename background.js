@@ -385,7 +385,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   }
 
   if (message.action === "translateSelection") {
-    handleTranslateSelection(message.selectedText, message.videoTitle)
+    handleTranslateSelection(
+      message.selectedText,
+      message.pageTitle || message.videoTitle,
+    )
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
     return true;
@@ -1635,9 +1638,9 @@ async function handleTranslateContent(
 
 /**
  * Translates a user-selected string into Simplified Chinese.
- * Used by the YouTube page popup and the side-panel selection tooltip.
+ * Used by the page popup and the side-panel selection tooltip.
  */
-async function handleTranslateSelection(selectedText, videoTitle) {
+async function handleTranslateSelection(selectedText, pageTitle) {
   try {
     const sourceText = validateSelectionTranslationRequest(selectedText);
     if (isMostlyChinese(sourceText)) {
@@ -1656,7 +1659,7 @@ async function handleTranslateSelection(selectedText, videoTitle) {
       "Selection translation",
       {
         langName,
-        videoTitle: videoTitle || "Unknown",
+        pageTitle: pageTitle || "Unknown",
         baseRules,
       },
     );
