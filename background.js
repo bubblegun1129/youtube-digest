@@ -5,7 +5,8 @@
  * 1. Opening the side panel when the user clicks the extension icon
  * 2. Fetching YouTube transcripts via Supadata API
  * 3. Calling DeepSeek to analyze the transcript
- * 4. Sending results back to the side panel
+ * 4. Translating selected page or transcript text into Simplified Chinese
+ * 5. Sending results back to the side panel
  *
  * Think of it like a backend server — it does the heavy lifting
  * so the UI (side panel) can stay fast and responsive.
@@ -250,6 +251,40 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.runtime.openOptionsPage();
+  ensureSelectionContextMenu();
+});
+
+const SELECTION_CONTEXT_MENU_ID = "ytd-translate-selection";
+
+function ensureSelectionContextMenu() {
+  if (!chrome.contextMenus?.create) return;
+  const createMenu = () => {
+    chrome.contextMenus.create({
+      id: SELECTION_CONTEXT_MENU_ID,
+      title: "翻译成中文",
+      contexts: ["selection"],
+    });
+  };
+  const removed = chrome.contextMenus.removeAll?.();
+  if (removed && typeof removed.then === "function") {
+    removed.then(createMenu).catch(createMenu);
+    return;
+  }
+  createMenu();
+}
+
+ensureSelectionContextMenu();
+
+chrome.contextMenus?.onClicked?.addListener(async (info, tab) => {
+  if (info.menuItemId !== SELECTION_CONTEXT_MENU_ID || !tab?.id) return;
+  try {
+    await chrome.tabs.sendMessage(tab.id, {
+      action: "showSelectionTranslation",
+      selectedText: info.selectionText || "",
+    });
+  } catch (error) {
+    debugLog("[YouTube Digest] Could not show selection translation:", error);
+  }
 });
 
 /**
@@ -377,6 +412,16 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.contentType,
       message.targetLanguage,
       message.videoTitle,
+    )
+      .then(sendResponse)
+      .catch((err) => sendResponse({ success: false, error: err.message }));
+    return true;
+  }
+
+  if (message.action === "translateSelection") {
+    handleTranslateSelection(
+      message.selectedText,
+      message.pageTitle || message.videoTitle,
     )
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
@@ -1473,6 +1518,40 @@ function looksLikeChineseTranslation(text, sourceText) {
   return /[\u3400-\u9fff]/.test(text);
 }
 
+const SELECTION_TRANSLATION_MAX_CHARS = 2000;
+
+function normalizeSelectedText(text) {
+  return typeof text === "string" ? text.replace(/\s+/g, " ").trim() : "";
+}
+
+function validateSelectionTranslationRequest(text) {
+  const normalized = normalizeSelectedText(text);
+  if (!normalized) {
+    throw new Error("Selected text is empty");
+  }
+  if (normalized.length > SELECTION_TRANSLATION_MAX_CHARS) {
+    throw new Error("Selected text is too long to translate");
+  }
+  return normalized;
+}
+
+function isMostlyChinese(text) {
+  const compact = String(text || "").replace(/\s+/g, "");
+  if (compact.length < 2) return false;
+  const cjk = (compact.match(/[\u3400-\u9fff]/g) || []).length;
+  const latin = (compact.match(/[A-Za-z]/g) || []).length;
+  return cjk >= 2 && latin < 4 && cjk / compact.length >= 0.6;
+}
+
+function looksLikeChineseSelectionTranslation(text, sourceText) {
+  const translated = String(text || "").trim();
+  if (!translated) return false;
+  if (translated === sourceText) return true;
+  if (/[\u3400-\u9fff]/.test(translated)) return true;
+  const latin = (sourceText.match(/[A-Za-z]/g) || []).length;
+  return latin === 0;
+}
+
 /**
  * Aligns untrusted model output by exact stable ID. Missing, duplicated,
  * unknown, empty, or clearly non-Chinese values become explicit row errors.
@@ -1592,6 +1671,54 @@ async function handleTranslateContent(
 }
 
 /**
+ * Translates a user-selected string into Simplified Chinese.
+ * Used by the page popup and the side-panel selection tooltip.
+ */
+async function handleTranslateSelection(selectedText, pageTitle) {
+  try {
+    const sourceText = validateSelectionTranslationRequest(selectedText);
+    if (isMostlyChinese(sourceText)) {
+      return { success: true, text: sourceText, skipped: true };
+    }
+
+    const settings = await getSettings();
+    if (!settings.aiApiKey) {
+      return { success: false, error: "DeepSeek API key not configured" };
+    }
+
+    const langName = "Simplified Chinese";
+    const baseRules = await getTranslationBaseRules("zh");
+    const systemPrompt = await loadPromptSection(
+      "translation.md",
+      "Selection translation",
+      {
+        langName,
+        pageTitle: pageTitle || "Unknown",
+        baseRules,
+      },
+    );
+
+    const result = await callAiTranslation(systemPrompt, sourceText, {
+      temperature: 0.2,
+      maxTokens: 1024,
+    });
+    if (!result.success) return result;
+
+    const translated = result.text.trim();
+    if (!looksLikeChineseSelectionTranslation(translated, sourceText)) {
+      return {
+        success: false,
+        error: "Translation returned no valid Chinese text",
+      };
+    }
+    return { success: true, text: translated };
+  } catch (error) {
+    console.error("[YouTube Digest] Selection translation error:", error);
+    return { success: false, error: error.message || "Translation failed" };
+  }
+}
+
+/**
  * Makes a single DeepSeek call for translation.
  * Uses temperature 0.3 for consistent, predictable translations.
  *
@@ -1635,4 +1762,8 @@ globalThis.__YTD_TRANSLATION_TESTING__ = {
   validateTranscriptBatchRequest,
   normalizeTranslatedSegmentBatch,
   handleTranslateContent,
+  validateSelectionTranslationRequest,
+  isMostlyChinese,
+  looksLikeChineseSelectionTranslation,
+  handleTranslateSelection,
 };

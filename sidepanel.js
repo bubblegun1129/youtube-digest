@@ -1177,7 +1177,7 @@ function sanitizeFilename(str) {
 
 /**
  * Sets up text selection handling in the transcript.
- * When user selects text, shows an "Explain" button.
+ * When user selects text, shows a Chinese translation and an "Explain" button.
  */
 function setupExplainFeature() {
   const transcriptList = document.getElementById("transcriptList");
@@ -1191,11 +1191,61 @@ function setupExplainFeature() {
   const tooltip = document.createElement("div");
   tooltip.id = "explainTooltip";
   tooltip.className = "explain-tooltip";
-  tooltip.innerHTML = `<button class="explain-btn">💡 Explain</button>`;
+  tooltip.innerHTML = `
+    <div class="selection-translation-card">
+      <div class="selection-translation-kicker">中文</div>
+      <div class="selection-translation-text" id="selectionTranslationText">Translating…</div>
+      <div class="selection-translation-actions">
+        <button class="explain-btn" type="button">💡 Explain</button>
+      </div>
+    </div>
+  `;
   tooltip.style.display = "none";
   document.body.appendChild(tooltip);
 
   let selectedText = "";
+  let selectionTranslationRequestId = 0;
+  let lastTranslatedSelection = "";
+
+  const translationTextEl = tooltip.querySelector("#selectionTranslationText");
+
+  async function fillSelectionTranslation(sourceText, requestId) {
+    if (!translationTextEl) return;
+    const compact = sourceText.replace(/\s+/g, "");
+    const cjk = (compact.match(/[\u3400-\u9fff]/g) || []).length;
+    const latin = (compact.match(/[A-Za-z]/g) || []).length;
+    const alreadyChinese =
+      compact.length >= 2 &&
+      cjk >= 2 &&
+      latin < 4 &&
+      cjk / compact.length >= 0.6;
+
+    if (alreadyChinese) {
+      translationTextEl.textContent = sourceText;
+      return;
+    }
+
+    translationTextEl.textContent = "Translating…";
+    try {
+      const result = await sendTranslationMessage({
+        action: "translateSelection",
+        selectedText: sourceText,
+        videoTitle: currentVideoTitle,
+      });
+      if (requestId !== selectionTranslationRequestId || !translationTextEl.isConnected) {
+        return;
+      }
+      translationTextEl.textContent =
+        result?.success && result.text
+          ? result.text
+          : result?.error || "Translation failed.";
+    } catch (error) {
+      if (requestId !== selectionTranslationRequestId || !translationTextEl.isConnected) {
+        return;
+      }
+      translationTextEl.textContent = error.message || "Translation failed.";
+    }
+  }
 
   // Interacting with Explain must preserve the transcript selection and stay
   // isolated from document/row click behavior.
@@ -1229,7 +1279,14 @@ function setupExplainFeature() {
       tooltip.style.display = "block";
       tooltip.style.top = `${rect.bottom + window.scrollY + 8}px`;
       tooltip.style.left = `${rect.left + rect.width / 2}px`;
+      if (selectedText !== lastTranslatedSelection) {
+        lastTranslatedSelection = selectedText;
+        const requestId = ++selectionTranslationRequestId;
+        fillSelectionTranslation(selectedText, requestId);
+      }
     } else {
+      selectionTranslationRequestId += 1;
+      lastTranslatedSelection = "";
       tooltip.style.display = "none";
     }
   });
@@ -1237,6 +1294,8 @@ function setupExplainFeature() {
   // Hide tooltip when clicking elsewhere
   document.addEventListener("mousedown", (e) => {
     if (!tooltip.contains(e.target)) {
+      selectionTranslationRequestId += 1;
+      lastTranslatedSelection = "";
       tooltip.style.display = "none";
     }
   });

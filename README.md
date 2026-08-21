@@ -6,6 +6,7 @@ Turn every YouTube video into a resource for deep learning. YouTube Digest bring
 
 - Turn captions into a readable, searchable learning resource.
 - Learn languages with the original transcript, a Simplified Chinese translation, or an aligned bilingual view.
+- Select text on any webpage, including YouTube, to auto-translate it into Simplified Chinese.
 - Build understanding with an AI overview, chapters, key quotes, and selected-text explanations.
 - Navigate long videos by clicking timestamps in the transcript, overview, or notes.
 - Save polished timestamped notes for later study.
@@ -94,15 +95,17 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 3. Read the timestamped transcript, or choose **Original**, **中文**, or **双语**.
 4. Open **Overview** when you want AI-generated chapters and key quotes.
 5. Select transcript text when you want an AI explanation.
-6. Save a note from the player or a key quote, then revisit it from **Notes**.
+6. Select text on any webpage. A translation card appears next to the selection. You can also right-click the selection and choose **翻译成中文**.
+7. Save a note from the player or a key quote, then revisit it from **Notes**.
 
 ## What works today
 
 - Google Chrome 116 or newer, using the Side Panel API.
-- Standard `youtube.com/watch` video pages.
+- Standard `youtube.com/watch` video pages for transcripts, overviews, and notes.
+- On-demand Simplified Chinese translation of selected text on ordinary http(s) webpages, including YouTube.
 - Native subtitle tracks returned by Supadata. YouTube Digest prefers English when available, but may show another native language.
 - Original, Simplified Chinese, and aligned bilingual transcript views.
-- AI overviews, selected-text explanations, translation, and automatic note polishing.
+- AI overviews, selected-text explanations, on-demand selected-text Chinese translation, and automatic note polishing.
 - Local notes and a local cache for recent transcript and digest results.
 - DeepSeek V4 Flash for all published AI features. Other providers require a local code adaptation and are not supported by this published version.
 
