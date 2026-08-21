@@ -1039,6 +1039,43 @@ body {
   z-index: 1000;
   transform: translateX(-50%);
   animation: fadeIn 0.15s ease;
+  width: min(280px, calc(100% - 24px));
+}
+
+.selection-translation-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--r-md);
+  box-shadow: var(--shadow-md);
+  overflow: hidden;
+}
+
+.selection-translation-kicker {
+  padding: 10px 12px 0;
+  font-family: var(--font-body);
+  font-size: 10px;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--accent);
+}
+
+.selection-translation-text {
+  padding: 6px 12px 10px;
+  font-family: var(--font-reading);
+  font-size: 13.5px;
+  line-height: 1.55;
+  color: var(--text);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 9em;
+  overflow-y: auto;
+}
+
+.selection-translation-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding: 0 10px 10px;
 }
 
 .explain-btn {

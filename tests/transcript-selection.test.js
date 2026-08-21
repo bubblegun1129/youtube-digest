@@ -50,4 +50,9 @@ test("the Explain tooltip preserves selection and contains pointer events", () =
     source,
     /\.addEventListener\("click", async \(event\) => \{\s+event\.preventDefault\(\);\s+event\.stopPropagation\(\);/,
   );
+  assert.match(
+    source,
+    /action: "translateSelection"[\s\S]*?videoTitle: currentVideoTitle/,
+    "transcript selections must auto-translate to Chinese",
+  );
 });

@@ -593,4 +593,79 @@ test("Chinese prompt preserves natural bilingual-learning style rules", () => {
   assert.match(prompt, /Use 你, never 您/);
   assert.match(prompt, /spaces between Chinese and adjacent English words or digits/);
   assert.match(prompt, /source-language `text`/);
+  assert.match(prompt, /## Selection translation/);
+  assert.match(prompt, /Output only the translated text/);
+});
+
+test("selection translation validates length and skips mostly Chinese text", async () => {
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async () => {
+      throw new Error("Unexpected provider call");
+    },
+  });
+
+  assert.deepEqual(
+    helpers.validateSelectionTranslationRequest("  Hello world  "),
+    "Hello world",
+  );
+  assert.throws(
+    () => helpers.validateSelectionTranslationRequest("   "),
+    /empty/,
+  );
+  assert.throws(
+    () => helpers.validateSelectionTranslationRequest("x".repeat(2001)),
+    /too long/,
+  );
+  assert.equal(helpers.isMostlyChinese("这是一段完整的中文句子。"), true);
+  assert.equal(helpers.isMostlyChinese("Hello world from YouTube Digest"), false);
+  assert.equal(
+    helpers.looksLikeChineseSelectionTranslation("你好。", "Hello."),
+    true,
+  );
+  assert.equal(
+    helpers.looksLikeChineseSelectionTranslation("Hello.", "Hello."),
+    true,
+  );
+  assert.equal(
+    helpers.looksLikeChineseSelectionTranslation("Hello there.", "Hello."),
+    false,
+  );
+
+  const skipped = await helpers.handleTranslateSelection(
+    "这是一段完整的中文句子。",
+    "Video",
+  );
+  assert.equal(skipped.success, true);
+  assert.equal(skipped.skipped, true);
+  assert.equal(skipped.text, "这是一段完整的中文句子。");
+});
+
+test("selection translation asks DeepSeek for Simplified Chinese text", async () => {
+  const requests = [];
+  const helpers = loadBackgroundHelpers({
+    fetchImpl: async (url, options) => {
+      if (String(url).startsWith("chrome-extension://")) {
+        return { ok: true, text: async () => read("prompts/translation.md") };
+      }
+      requests.push(JSON.parse(options.body));
+      return {
+        ok: true,
+        json: async () => ({
+          choices: [{ message: { content: "你好，世界。" } }],
+        }),
+      };
+    },
+  });
+
+  const result = await helpers.handleTranslateSelection(
+    "Hello, world.",
+    "Demo Video",
+  );
+  assert.equal(result.success, true);
+  assert.equal(result.text, "你好，世界。");
+  assert.equal(requests.length, 1);
+  assert.match(requests[0].messages[0].content, /selected text/);
+  assert.match(requests[0].messages[0].content, /Demo Video/);
+  assert.equal(requests[0].messages[1].content, "Hello, world.");
+  assert.equal(requests[0].max_tokens, 1024);
 });

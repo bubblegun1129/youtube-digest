@@ -11,9 +11,10 @@ Depending on the feature you use, YouTube Digest handles:
 - the canonical URL and video ID of the active YouTube video;
 - transcript text and timestamps;
 - video metadata such as title, channel, description, and duration;
-- text you select in the transcript and nearby transcript context;
+- text you select on the YouTube watch page or in the transcript, plus nearby
+  transcript context for explanations;
 - transcript context around a timestamped note;
-- content you ask to translate;
+- content you ask to translate, including selected page or transcript text;
 - notes you save;
 - Supadata and DeepSeek configuration, including API keys; and
 - cached transcript, digest, and translation results.
@@ -30,6 +31,8 @@ The published version sends AI feature content to DeepSeek V4 Flash at `https://
 
 - transcript plus relevant title, channel, description, or duration for an overview;
 - selected text plus nearby transcript context for an explanation;
+- selected YouTube page or transcript text for on-demand Simplified Chinese
+  translation;
 - small semantic transcript batches currently needed for progressive Chinese
   translation, or requested overview or explanation content;
 - nearby transcript context and video metadata when polishing a saved note.
