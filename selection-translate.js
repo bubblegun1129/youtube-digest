@@ -242,21 +242,26 @@ function ensureSelectionTranslator() {
 }
 
 function positionSelectionTranslator(range) {
-  if (!selectionTranslationHost || !range) return;
-  const rect = range.getBoundingClientRect();
-  if (!rect || (rect.width === 0 && rect.height === 0)) return;
-
+  if (!selectionTranslationHost) return;
+  const rect = range?.getBoundingClientRect?.();
   const popupWidth = Math.min(340, window.innerWidth - 24);
-  const left = Math.min(
-    Math.max(12, rect.left + rect.width / 2 - popupWidth / 2),
-    window.innerWidth - popupWidth - 12,
-  );
-  const below = rect.bottom + 10;
-  const estimatedHeight = 180;
-  const top =
-    below + estimatedHeight > window.innerHeight - 12
-      ? Math.max(12, rect.top - estimatedHeight - 10)
-      : below;
+  let left;
+  let top;
+  if (rect && (rect.width > 0 || rect.height > 0)) {
+    left = Math.min(
+      Math.max(12, rect.left + rect.width / 2 - popupWidth / 2),
+      window.innerWidth - popupWidth - 12,
+    );
+    const below = rect.bottom + 10;
+    const estimatedHeight = 180;
+    top =
+      below + estimatedHeight > window.innerHeight - 12
+        ? Math.max(12, rect.top - estimatedHeight - 10)
+        : below;
+  } else {
+    left = 24;
+    top = 24;
+  }
 
   selectionTranslationHost.style.position = "fixed";
   selectionTranslationHost.style.left = `${Math.round(left)}px`;
@@ -320,14 +325,19 @@ async function maybeTranslateSelection() {
 
   const inEditable =
     isEditableNode(current.anchorNode) || isEditableNode(current.focusNode);
-  const sourceText = normalizeSelectedText(current.text);
+  await translateSourceText(normalizeSelectedText(current.text), current.range, {
+    inEditable,
+  });
+}
+
+async function translateSourceText(sourceText, range, { inEditable = false } = {}) {
   if (!shouldOfferSelectionTranslation(sourceText, { inEditable })) {
     hideSelectionTranslator();
     return;
   }
 
   if (sourceText === selectionTranslationLastText && selectionTranslationHost) {
-    positionSelectionTranslator(current.range);
+    positionSelectionTranslator(range);
     return;
   }
 
@@ -341,7 +351,7 @@ async function maybeTranslateSelection() {
     loading: !isMostlyChineseSelection(sourceText),
     copyable: false,
   });
-  positionSelectionTranslator(current.range);
+  positionSelectionTranslator(range);
 
   const cached = selectionTranslationCache.get(sourceText);
   if (cached) {
@@ -404,6 +414,9 @@ function scheduleSelectionTranslation() {
 
 function handleSelectionPointerEvent(event) {
   if (isInsideSelectionTranslator(event.target)) return;
+  // Right-click opens Chrome's menu, which covers the popup. Use the
+  // "翻译成中文" context item instead of auto-showing under the menu.
+  if (typeof event.button === "number" && event.button !== 0) return;
   scheduleSelectionTranslation();
 }
 
@@ -426,9 +439,15 @@ function handleSelectionKeyEvent(event) {
 
 function handleSelectionOutsidePointer(event) {
   if (isInsideSelectionTranslator(event.target)) return;
+  if (event.button === 2) return;
   const current = getCurrentPageSelection();
   if (current && shouldOfferSelectionTranslation(current.text)) return;
   hideSelectionTranslator();
+}
+
+function fallbackTranslationRange() {
+  const current = getCurrentPageSelection();
+  return current?.range || null;
 }
 
 function setupSelectionTranslation() {
@@ -441,6 +460,15 @@ function setupSelectionTranslation() {
   window.addEventListener("popstate", hideSelectionTranslator);
   document.addEventListener("yt-navigate-finish", hideSelectionTranslator);
 }
+
+chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
+  if (message?.action !== "showSelectionTranslation") return false;
+  const sourceText = normalizeSelectedText(message.selectedText || "");
+  translateSourceText(sourceText, fallbackTranslationRange(), {
+    inEditable: false,
+  }).then(() => sendResponse({ success: true }));
+  return true;
+});
 
 if (document.readyState === "loading") {
   document.addEventListener("DOMContentLoaded", setupSelectionTranslation);

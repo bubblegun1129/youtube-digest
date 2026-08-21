@@ -251,6 +251,40 @@ chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.runtime.openOptionsPage();
+  ensureSelectionContextMenu();
+});
+
+const SELECTION_CONTEXT_MENU_ID = "ytd-translate-selection";
+
+function ensureSelectionContextMenu() {
+  if (!chrome.contextMenus?.create) return;
+  const createMenu = () => {
+    chrome.contextMenus.create({
+      id: SELECTION_CONTEXT_MENU_ID,
+      title: "翻译成中文",
+      contexts: ["selection"],
+    });
+  };
+  const removed = chrome.contextMenus.removeAll?.();
+  if (removed && typeof removed.then === "function") {
+    removed.then(createMenu).catch(createMenu);
+    return;
+  }
+  createMenu();
+}
+
+ensureSelectionContextMenu();
+
+chrome.contextMenus?.onClicked?.addListener(async (info, tab) => {
+  if (info.menuItemId !== SELECTION_CONTEXT_MENU_ID || !tab?.id) return;
+  try {
+    await chrome.tabs.sendMessage(tab.id, {
+      action: "showSelectionTranslation",
+      selectedText: info.selectionText || "",
+    });
+  } catch (error) {
+    debugLog("[YouTube Digest] Could not show selection translation:", error);
+  }
 });
 
 /**

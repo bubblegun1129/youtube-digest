@@ -14,6 +14,7 @@ test("manifest uses minimized install-time permissions", () => {
   assert.equal(manifest.minimum_chrome_version, "116");
   assert.equal(packageJson.version, manifest.version);
   assert.equal(manifest.options_ui.page, "options.html");
+  assert.ok(manifest.permissions.includes("contextMenus"));
   assert.ok(!manifest.permissions.includes("activeTab"));
   assert.ok(manifest.host_permissions.includes("https://api.deepseek.com/*"));
   assert.ok(!manifest.host_permissions.includes("<all_urls>"));

@@ -95,7 +95,7 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 3. Read the timestamped transcript, or choose **Original**, **中文**, or **双语**.
 4. Open **Overview** when you want AI-generated chapters and key quotes.
 5. Select transcript text when you want an AI explanation.
-6. Select text on any webpage, or in the transcript, to auto-translate it into Simplified Chinese.
+6. Select text on any webpage. A translation card appears next to the selection. You can also right-click the selection and choose **翻译成中文**.
 7. Save a note from the player or a key quote, then revisit it from **Notes**.
 
 ## What works today

@@ -72,6 +72,7 @@ YouTube Digest uses Chrome permissions for these purposes:
 - `storage`: store settings, keys, notes, and cached results locally.
 - `tabs`: identify and interact with the active YouTube tab.
 - `scripting`: coordinate the extension's YouTube page controls.
+- `contextMenus`: add a Translate to Chinese item when you right-click selected text.
 - YouTube host access: read the active video's URL and metadata and provide timestamp controls.
 - Content script injection on ordinary http(s) pages: show a translation popup
   only after you select text. The script does not send page content until you

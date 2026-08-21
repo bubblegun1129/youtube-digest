@@ -27,6 +27,7 @@ function loadContentHelpers() {
         async sendMessage() {
           return { success: true };
         },
+        onMessage: { addListener() {} },
       },
     },
     setTimeout() {
@@ -49,7 +50,11 @@ test("page selection translation is wired through the content script and backgro
   assert.doesNotMatch(content, /action: "translateSelection"/);
   assert.match(selectionScript, /setupSelectionTranslation\(\)/);
   assert.match(selectionScript, /action: "translateSelection"/);
-  assert.match(selectionScript, /pageTitle: getPageTitle\(\)/);
+  assert.match(selectionScript, /showSelectionTranslation/);
+  assert.match(selectionScript, /event\.button !== 0/);
+  assert.match(background, /contextMenus\.create/);
+  assert.match(background, /翻译成中文/);
+  assert.ok(manifest.permissions.includes("contextMenus"));
   assert.match(selectionScript, /ytd-selection-translator/);
   assert.match(selectionScript, /attachShadow\(\{ mode: "open" \}\)/);
   assert.doesNotMatch(selectionScript, /pathname\.includes\("\/watch"\)/);
