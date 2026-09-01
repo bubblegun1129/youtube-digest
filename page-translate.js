@@ -6,11 +6,17 @@
  */
 
 const PAGE_TRANSLATE_MAX_SELECTION_CHARS = 4000;
+const PAGE_TRANSLATE_DEBOUNCE_MS = 300;
 const PAGE_TRANSLATE_POPUP_ID = "ytd-page-translate-popup";
 
 let pageTranslatePopup = null;
 let pageTranslatePopupContent = null;
 let pageTranslateRequestId = 0;
+// Session-level cache of successful translations: selected text -> translated
+// text. Re-selecting the same phrase shows the cached result with zero API
+// cost. Failures are intentionally NOT cached so a retry still works.
+const pageTranslateCache = new Map();
+let pageTranslateDebounceTimer = null;
 
 function getSelectedPageText() {
   const selection = window.getSelection();
@@ -117,10 +123,20 @@ function setPageTranslatePopupContent(text, state = "text") {
 
 function hidePageTranslatePopup() {
   pageTranslateRequestId += 1;
+  clearTimeout(pageTranslateDebounceTimer);
+  pageTranslateDebounceTimer = null;
   if (pageTranslatePopup) pageTranslatePopup.style.display = "none";
 }
 
 async function translatePageSelection(text) {
+  // chrome.runtime can be briefly unavailable (extension reload, sandboxed
+  // contexts, etc.). Without this guard, the raw
+  // "Cannot read properties of undefined (reading 'sendMessage')" leaks to
+  // the popup and tells the user nothing actionable.
+  if (!chrome?.runtime?.sendMessage) {
+    throw new Error("Extension context unavailable. Try reloading the page.");
+  }
+
   const result = await chrome.runtime.sendMessage({
     action: "translateContent",
     content: { text },
@@ -143,31 +159,47 @@ async function translatePageSelection(text) {
 function handlePageSelectionMouseup(event) {
   if (pageTranslatePopup?.contains(event.target)) return;
 
-  setTimeout(async () => {
-    const { text, rect } = getSelectedPageText();
-    if (!text || !rect) {
-      hidePageTranslatePopup();
-      return;
-    }
+  // Debounce: adjusting a selection or re-grabbing text fires many mouseup
+  // events for the same translation need. Collapse them into one request.
+  clearTimeout(pageTranslateDebounceTimer);
+  pageTranslateDebounceTimer = setTimeout(() => {
+    pageTranslateDebounceTimer = null;
+    void handlePageSelectionDebounced();
+  }, PAGE_TRANSLATE_DEBOUNCE_MS);
+}
 
-    const requestId = ++pageTranslateRequestId;
-    positionPageTranslatePopup(rect);
+async function handlePageSelectionDebounced() {
+  const { text, rect } = getSelectedPageText();
+  if (!text || !rect) {
+    hidePageTranslatePopup();
+    return;
+  }
 
-    if (text.length > PAGE_TRANSLATE_MAX_SELECTION_CHARS) {
-      setPageTranslatePopupContent("Selected text is too long.", "error");
-      return;
-    }
+  const requestId = ++pageTranslateRequestId;
+  positionPageTranslatePopup(rect);
 
-    setPageTranslatePopupContent("Translating...", "status");
-    try {
-      const translatedText = await translatePageSelection(text);
-      if (requestId !== pageTranslateRequestId) return;
-      setPageTranslatePopupContent(translatedText, "text");
-    } catch (error) {
-      if (requestId !== pageTranslateRequestId) return;
-      setPageTranslatePopupContent(error.message || "Translation failed.", "error");
-    }
-  }, 0);
+  if (text.length > PAGE_TRANSLATE_MAX_SELECTION_CHARS) {
+    setPageTranslatePopupContent("Selected text is too long.", "error");
+    return;
+  }
+
+  // Cache hit: show the previous translation without spending another request.
+  const cached = pageTranslateCache.get(text);
+  if (cached !== undefined) {
+    setPageTranslatePopupContent(cached, "text");
+    return;
+  }
+
+  setPageTranslatePopupContent("Translating...", "status");
+  try {
+    const translatedText = await translatePageSelection(text);
+    if (requestId !== pageTranslateRequestId) return;
+    pageTranslateCache.set(text, translatedText);
+    setPageTranslatePopupContent(translatedText, "text");
+  } catch (error) {
+    if (requestId !== pageTranslateRequestId) return;
+    setPageTranslatePopupContent(error.message || "Translation failed.", "error");
+  }
 }
 
 document.addEventListener("mouseup", handlePageSelectionMouseup);
