@@ -19,6 +19,13 @@ const DEBUG = false;
 const AI_PROVIDER_IDLE_TIMEOUT_MS = 50_000;
 const AI_PROVIDER_HARD_TIMEOUT_MS = 120_000;
 const AI_PROVIDER_MAX_RESPONSE_BYTES = 2 * 1024 * 1024;
+const TRANSCRIPT_CACHE_TTL_MS = 30 * 24 * 60 * 60 * 1000;
+// "This video has no captions" is a property of the video, not a transient
+// condition — captions don't appear out of nowhere. Cache the failure briefly
+// so the panel, captions overlay, and note flow stop burning a Supadata
+// request on every tab switch / click for the same caption-less video.
+const TRANSCRIPT_FAILURE_CACHE_TTL_MS = 24 * 60 * 60 * 1000;
+const transcriptFetchPromises = new Map();
 const debugLog = (...args) => {
   if (DEBUG) console.log(...args);
 };
@@ -604,6 +611,163 @@ async function getPlayerVideoDetails(tabId) {
 // TRANSCRIPT FETCHING VIA SUPADATA API
 // ============================================================
 
+function transcriptCacheKey(videoId) {
+  return `digest_${videoId}`;
+}
+
+function cachedDigestToTranscriptResult(cached) {
+  if (!cached || !Array.isArray(cached.transcript)) return null;
+  return {
+    success: true,
+    transcript: cached.transcript,
+    transcriptText: String(cached.transcriptText || "").trim(),
+    transcriptTextTimestamped: String(
+      cached.transcriptTimestamped || cached.transcriptTextTimestamped || "",
+    ).trim(),
+    language: cached.transcriptLanguage || cached.language || null,
+  };
+}
+
+async function readCachedTranscript(videoId) {
+  if (!videoId) return null;
+
+  try {
+    const key = transcriptCacheKey(videoId);
+    const result = await chrome.storage.local.get(key);
+    const cached = result[key];
+    if (!cached) return null;
+
+    const timestamp = Number(cached.timestamp) || 0;
+    if (Date.now() - timestamp > TRANSCRIPT_CACHE_TTL_MS) {
+      await chrome.storage.local.remove(key);
+      return null;
+    }
+
+    return cachedDigestToTranscriptResult(cached);
+  } catch (error) {
+    debugLog("[YouTube Digest] Transcript cache read failed:", error);
+    return null;
+  }
+}
+
+async function writeCachedTranscript(videoId, transcriptResult) {
+  if (!videoId || !transcriptResult?.success) return;
+
+  try {
+    const key = transcriptCacheKey(videoId);
+    const existing = await chrome.storage.local.get(key);
+    const previous = existing[key] || {};
+    await chrome.storage.local.set({
+      [key]: {
+        ...previous,
+        transcript: transcriptResult.transcript,
+        transcriptText: transcriptResult.transcriptText,
+        transcriptTimestamped: transcriptResult.transcriptTextTimestamped,
+        transcriptLanguage: transcriptResult.language,
+        timestamp: Date.now(),
+      },
+    });
+  } catch (error) {
+    debugLog("[YouTube Digest] Transcript cache write failed:", error);
+  }
+}
+
+// Which Supadata errors describe a *property of the video* (no captions at
+// all) rather than a transient condition. These are safe to cache briefly.
+// Transient errors (RATE_LIMITED, INVALID_KEY, network, job timeouts) must
+// NOT be cached — the user should be able to retry them right away.
+const TRANSCRIPT_CACHEABLE_ERRORS = new Set([
+  "NO_TRANSCRIPT",
+  "EMPTY_TRANSCRIPT",
+]);
+
+function failedTranscriptCacheKey(videoId) {
+  return `digest_failed_${videoId}`;
+}
+
+async function readFailedTranscript(videoId) {
+  if (!videoId) return null;
+
+  try {
+    const key = failedTranscriptCacheKey(videoId);
+    const result = await chrome.storage.local.get(key);
+    const failed = result[key];
+    if (!failed) return null;
+
+    const timestamp = Number(failed.timestamp) || 0;
+    if (Date.now() - timestamp > TRANSCRIPT_FAILURE_CACHE_TTL_MS) {
+      await chrome.storage.local.remove(key);
+      return null;
+    }
+
+    return {
+      success: false,
+      error: failed.error,
+      message: failed.message || "No transcript available for this video.",
+    };
+  } catch (error) {
+    debugLog("[YouTube Digest] Failed-transcript cache read failed:", error);
+    return null;
+  }
+}
+
+async function writeFailedTranscript(videoId, transcriptResult) {
+  if (!videoId || transcriptResult?.success) return;
+  if (!TRANSCRIPT_CACHEABLE_ERRORS.has(transcriptResult.error)) return;
+
+  try {
+    await chrome.storage.local.set({
+      [failedTranscriptCacheKey(videoId)]: {
+        error: transcriptResult.error,
+        message: transcriptResult.message || "",
+        timestamp: Date.now(),
+      },
+    });
+  } catch (error) {
+    debugLog("[YouTube Digest] Failed-transcript cache write failed:", error);
+  }
+}
+
+/**
+ * Fetches the transcript for a YouTube video using Supadata API.
+ *
+ * All callers go through this function so one video costs at most one
+ * Supadata transcript request while the cache is valid, even when the side
+ * panel, player captions, and notes feature ask at nearly the same time.
+ *
+ * @param {string} videoId - The YouTube video ID (e.g., "dQw4w9WgXcQ")
+ * @returns {Object} - { success, transcript, transcriptText, language } or { success: false, error }
+ */
+async function handleFetchTranscript(videoId) {
+  const cached = await readCachedTranscript(videoId);
+  if (cached) return cached;
+
+  // A recent "this video has no captions" failure is cached too, so we don't
+  // re-hit Supadata for the same caption-less video on every trigger.
+  const failed = await readFailedTranscript(videoId);
+  if (failed) return failed;
+
+  if (transcriptFetchPromises.has(videoId)) {
+    return transcriptFetchPromises.get(videoId);
+  }
+
+  const promise = fetchTranscriptFromSupadata(videoId).then(async (result) => {
+    if (result.success) {
+      await writeCachedTranscript(videoId, result);
+    } else {
+      await writeFailedTranscript(videoId, result);
+    }
+    return result;
+  });
+  transcriptFetchPromises.set(videoId, promise);
+
+  try {
+    return await promise;
+  } finally {
+    transcriptFetchPromises.delete(videoId);
+  }
+}
+
 /**
  * Fetches the transcript for a YouTube video using Supadata API.
  *
@@ -616,7 +780,7 @@ async function getPlayerVideoDetails(tabId) {
  * @param {string} videoId - The YouTube video ID (e.g., "dQw4w9WgXcQ")
  * @returns {Object} - { success, transcript, transcriptText, language } or { success: false, error }
  */
-async function handleFetchTranscript(videoId) {
+async function fetchTranscriptFromSupadata(videoId) {
   try {
     const settings = await getSettings();
     if (!settings.supadataApiKey) {

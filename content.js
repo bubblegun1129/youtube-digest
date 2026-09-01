@@ -49,6 +49,7 @@ const ytdCaptionsState = {
   processing: false,
   currentIndex: -1,
   generation: 0,
+  failedVideoIds: new Set(), // videos confirmed to have no captions this session
 };
 
 // ============================================================
@@ -1293,6 +1294,14 @@ async function loadBilingualCaptions() {
   const videoId = new URLSearchParams(window.location.search).get("v");
   if (!videoId) return;
 
+  // A previous attempt for this video failed (no captions). Don't re-fetch —
+  // the background caches the failure too, so re-requesting would just waste
+  // a message round-trip and flash the loading state for no result.
+  if (ytdCaptionsState.failedVideoIds.has(videoId)) {
+    showCaptionsError("No subtitles available for this video.");
+    return;
+  }
+
   // Same video already loaded — just reveal and top up translations.
   if (ytdCaptionsState.videoId === videoId && ytdCaptionsState.pages.length) {
     showCaptionsOverlay();
@@ -1346,6 +1355,7 @@ async function loadBilingualCaptions() {
       showCaptionsOverlay();
       handleCaptionsTimeUpdate();
     } else {
+      ytdCaptionsState.failedVideoIds.add(videoId);
       showCaptionsError(result?.message || "No subtitles available for this video.");
     }
   } catch (_error) {
@@ -1522,6 +1532,7 @@ function resetCaptionsState() {
   ytdCaptionsState.queue = [];
   ytdCaptionsState.queued.clear();
   ytdCaptionsState.currentIndex = -1;
+  ytdCaptionsState.failedVideoIds.clear();
   clearTimeout(ytdCaptionsToggleTimer);
   ytdCaptionsToggleTimer = null;
   hideCaptionsOverlay();

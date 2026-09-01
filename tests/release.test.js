@@ -32,6 +32,19 @@ test("manifest uses minimized install-time permissions", () => {
   assert.equal(manifest.version, "1.1.5");
 });
 
+test("Supadata transcript requests are centrally cached and deduplicated", () => {
+  const background = read("background.js");
+
+  assert.match(background, /const transcriptFetchPromises = new Map\(\)/);
+  assert.match(background, /async function readCachedTranscript\(videoId\)/);
+  assert.match(background, /async function writeCachedTranscript\(videoId, transcriptResult\)/);
+  assert.match(background, /if \(transcriptFetchPromises\.has\(videoId\)\)/);
+  assert.match(background, /return transcriptFetchPromises\.get\(videoId\)/);
+  assert.match(background, /fetchTranscriptFromSupadata\(videoId\)/);
+  assert.match(background, /transcriptFetchPromises\.delete\(videoId\)/);
+  assert.match(background, /transcriptTimestamped: transcriptResult\.transcriptTextTimestamped/);
+});
+
 test("release copy documents current scope without em dashes", () => {
   const readme = read("README.md");
   const chineseReadme = read("README.zh-CN.md");
