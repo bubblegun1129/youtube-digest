@@ -241,9 +241,28 @@ document.addEventListener("DOMContentLoaded", async () => {
   await restoreTranscriptMode();
   await evictOldCacheEntries(20);
 
-  const configStatus = await chrome.runtime.sendMessage({
-    action: "checkConfig",
-  });
+  let configStatus;
+  try {
+    configStatus = await chrome.runtime.sendMessage({
+      action: "checkConfig",
+    });
+  } catch (error) {
+    showError(
+      "Could not load YouTube Digest",
+      error?.message ||
+        "The extension background worker failed to start. Open chrome://extensions and click Reload.",
+    );
+    return;
+  }
+
+  if (!configStatus || configStatus.error) {
+    showError(
+      "Could not load YouTube Digest",
+      configStatus?.error ||
+        "The extension background worker did not respond. Open chrome://extensions and click Reload.",
+    );
+    return;
+  }
 
   if (!configStatus.hasSupadataKey || !configStatus.hasAiKey) {
     showConfigError(configStatus);

@@ -12,6 +12,7 @@ Depending on the feature you use, YouTube Digest handles:
 - transcript text and timestamps;
 - video metadata such as title, channel, description, and duration;
 - text you select in the transcript and nearby transcript context;
+- text you select on ordinary web pages when using selection translation;
 - transcript context around a timestamped note;
 - content you ask to translate;
 - notes you save;
@@ -70,10 +71,11 @@ YouTube Digest uses Chrome permissions for these purposes:
 - `tabs`: identify and interact with the active YouTube tab.
 - `scripting`: coordinate the extension's YouTube page controls.
 - YouTube host access: read the active video's URL and metadata and provide timestamp controls.
+- Ordinary website host access: translate text you select on http and https pages.
 - Supadata host access: retrieve transcripts.
 - DeepSeek host access: provide AI overviews, explanations, translation, and note polishing through DeepSeek V4 Flash.
 
-YouTube Digest does not use these permissions to monitor general browsing activity.
+YouTube Digest does not use these permissions to monitor general browsing activity. On ordinary websites it only sends text after you select it.
 
 ## No sale or advertising use
 
