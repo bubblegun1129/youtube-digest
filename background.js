@@ -258,28 +258,26 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
 });
 
 /**
- * Keep the side panel available on ordinary web pages as well as YouTube.
+ * Keep the side panel scoped to YouTube tabs only.
  *
- * Page selection translation runs on http(s) sites, so clicking the extension
- * icon must still open the panel there. Chrome:// and other internal pages
- * stay disabled so the panel does not linger on the New Tab or Extensions UI.
+ * Chrome side panels are "global" by default: once opened, the panel follows
+ * you to every tab. To make YouTube Digest behave like a YouTube-only tool, we
+ * enable the panel on YouTube tabs and disable it everywhere else. Disabling
+ * on a tab makes Chrome hide/close the panel for that tab, so it never lingers
+ * on a new tab or some other website. Selection translation on ordinary pages
+ * still runs through the page content script, without opening the side panel.
  *
  * We have to react to BOTH things that can change "what tab you're looking at":
  *   - onUpdated: the current tab navigates to a new URL
  *   - onActivated: you switch to (or open) a different tab
+ * The original code only handled onUpdated, which is why the panel stayed
+ * visible when switching to an already-loaded non-YouTube tab.
  */
-function isHttpPageUrl(url) {
-  return /^(https?:)\/\//i.test(url || "");
-}
-
 function updatePanelForTab(tabId, url) {
+  const isYouTube = (url || "").startsWith("https://www.youtube.com");
   // setOptions can reject if the tab just closed — ignore that harmlessly.
   chrome.sidePanel
-    .setOptions({
-      tabId,
-      path: "sidepanel.html",
-      enabled: isHttpPageUrl(url),
-    })
+    .setOptions({ tabId, path: "sidepanel.html", enabled: isYouTube })
     .catch(() => {});
 }
 

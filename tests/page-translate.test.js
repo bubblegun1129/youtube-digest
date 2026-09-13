@@ -73,30 +73,18 @@ test("page translation guards against missing chrome.runtime context", () => {
   );
 });
 
-test("side panel stays available on ordinary http(s) tabs", () => {
+test("side panel stays YouTube-only while page translation uses the content script", () => {
   const background = read("background.js");
   const sidepanel = read("sidepanel.js");
 
-  assert.match(background, /function isHttpPageUrl\(url\)/);
   assert.match(
     background,
-    /enabled:\s*isHttpPageUrl\(url\)/,
-    "icon click must open the panel on ordinary websites, not only YouTube",
-  );
-  assert.doesNotMatch(background, /enabled:\s*isYouTube/);
-
-  assert.match(sidepanel, /function isHttpPageUrl\(url\)/);
-  assert.match(
-    sidepanel,
-    /function handleFrontTab\(tab\) \{[\s\S]*?if \(!isHttpPageUrl\(url\)\) \{[\s\S]*?window\.close\(\);/,
+    /enabled:\s*isYouTube/,
+    "the extension icon must not open the side panel on ordinary websites",
   );
   assert.match(
     sidepanel,
-    /if \(!newVideoId\) \{[\s\S]*?showState\("welcome"\);[\s\S]*?return;/,
-  );
-  assert.doesNotMatch(
-    sidepanel,
-    /Panel is a YouTube-only tool — remove itself from non-YouTube tabs/,
+    /function handleFrontTab\(tab\) \{[\s\S]*?startsWith\("https:\/\/www\.youtube\.com"\)[\s\S]*?window\.close\(\);/,
   );
 });
 

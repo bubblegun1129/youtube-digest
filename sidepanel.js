@@ -303,11 +303,12 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 // FOLLOW THE ACTIVE TAB
 // ============================================================
 // The panel watches which tab is in front of it and reacts:
-//   - Front tab is not an ordinary http(s) page (chrome://, New Tab, etc.)
-//     -> close the panel so it does not linger on Chrome UI.
-//   - Front tab is an ordinary web page that is not a YouTube watch page
-//     -> keep the panel open and show the welcome state. Selection
-//     translation still runs on that page via the content script.
+//   - Front tab is NOT YouTube  -> the panel closes itself (window.close()).
+//     We do this OURSELVES rather than relying only on the background
+//     script's per-tab enable/disable, because Chrome doesn't reliably
+//     apply per-tab panel state to tabs spawned in unusual ways (e.g. a
+//     link opened from another app) — which let the panel linger on
+//     non-YouTube pages.
 //   - Front tab IS YouTube but on a different video -> refresh the digest.
 //     YouTube is a single-page app (clicking a video swaps content without
 //     a reload), so we track URL changes; startDigest() caches per video,
@@ -337,17 +338,14 @@ function panelIsShowingResults() {
   return results && results.style.display !== "none";
 }
 
-function isHttpPageUrl(url) {
-  return /^(https?:)\/\//i.test(url || "");
-}
-
 /**
- * Reacts to the URL now in front of the panel: close on Chrome internal
- * pages, show welcome on ordinary sites, refresh the digest on YouTube.
+ * Reacts to the URL now in front of the panel: close on non-YouTube,
+ * refresh the digest when the video changed.
  */
 function handleFrontTab(tab) {
   const url = tab?.url || tab?.pendingUrl || "";
-  if (!isHttpPageUrl(url)) {
+  if (!(url || "").startsWith("https://www.youtube.com")) {
+    // Panel is a YouTube-only tool — remove itself from non-YouTube tabs.
     window.close();
     return;
   }
@@ -355,10 +353,6 @@ function handleFrontTab(tab) {
   if (Number.isInteger(tab?.id)) youtubeTabId = tab.id;
 
   const newVideoId = extractVideoId(url);
-  if (!newVideoId) {
-    showState("welcome");
-    return;
-  }
   // Refresh when the video changed, or when we're not currently showing
   // results (e.g. user went home, then clicked back into the same video).
   if (newVideoId !== currentVideoId || !panelIsShowingResults()) {
@@ -468,22 +462,51 @@ function setNotesFilter(showAll) {
 
 async function checkCurrentTab() {
   try {
-    // Use the tab in front of this panel only. Searching other YouTube tabs
-    // would show a digest while the user is on an ordinary webpage.
+    // Try multiple strategies to find the YouTube tab
+    let tab = null;
+
+    // Strategy 1: Active tab in the browser window this side panel belongs to.
+    // This keeps multiple YouTube tabs from stealing Follow playback from each
+    // other when the panel is recreated after a tab switch.
     let activeTabQuery = { active: true };
     if (panelWindowId !== null) activeTabQuery.windowId = panelWindowId;
     else activeTabQuery.lastFocusedWindow = true;
 
-    const tabs = await chrome.tabs.query(activeTabQuery);
-    const tab = tabs[0];
+    let tabs = await chrome.tabs.query(activeTabQuery);
+    if (tabs[0]?.url?.includes("youtube.com")) {
+      tab = tabs[0];
+    }
+
+    // Strategy 2: Any active YouTube tab in this same window
+    if (!tab) {
+      const activeYouTubeQuery = {
+        url: "https://www.youtube.com/*",
+        active: true,
+      };
+      if (panelWindowId !== null) activeYouTubeQuery.windowId = panelWindowId;
+      tabs = await chrome.tabs.query(activeYouTubeQuery);
+      if (tabs[0]) tab = tabs[0];
+    }
+
+    // Strategy 3: Any YouTube tab in this window (last resort)
+    if (!tab) {
+      const anyYouTubeQuery = { url: "https://www.youtube.com/*" };
+      if (panelWindowId !== null) anyYouTubeQuery.windowId = panelWindowId;
+      tabs = await chrome.tabs.query(anyYouTubeQuery);
+      if (!tabs[0] && panelWindowId !== null) {
+        tabs = await chrome.tabs.query({ url: "https://www.youtube.com/*" });
+      }
+      if (tabs[0]) tab = tabs[0];
+    }
 
     debugLog("[YouTube Digest Panel] Found tab:", tab?.id, tab?.url);
 
-    if (!tab?.url || !isHttpPageUrl(tab.url)) {
+    if (!tab?.url) {
       showState("welcome");
       return;
     }
 
+    // Store the tab ID for reliable messaging later
     youtubeTabId = tab.id;
 
     const videoId = extractVideoId(tab.url);

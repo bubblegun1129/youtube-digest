@@ -66,9 +66,9 @@ Clearing local data does not delete information already processed or retained by
 
 YouTube Digest uses Chrome permissions for these purposes:
 
-- `sidePanel`: display the YouTube Digest interface beside YouTube and ordinary web pages.
+- `sidePanel`: display the YouTube Digest interface beside YouTube.
 - `storage`: store settings, keys, notes, and cached results locally.
-- `tabs`: identify and interact with the active tab.
+- `tabs`: identify and interact with the active YouTube tab.
 - `scripting`: coordinate the extension's YouTube page controls.
 - YouTube host access: read the active video's URL and metadata and provide timestamp controls.
 - Ordinary website host access: translate text you select on http and https pages.
