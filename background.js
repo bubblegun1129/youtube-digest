@@ -570,7 +570,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           sendResponse({ success: false, error: "No YouTube tab found" });
         }
       } catch (err) {
-        console.error("[YouTube Digest BG] Relay error:", err.message);
+        // Expected when the target tab's content script is unavailable (e.g.
+        // extension reload with stale pages, page still loading, SPA
+        // navigation). Side panel callers fall back gracefully, so log at
+        // debug level instead of polluting the extension error panel.
+        debugLog("[YouTube Digest BG] Relay failed:", err.message);
         sendResponse({ success: false, error: err.message });
       }
     })();
