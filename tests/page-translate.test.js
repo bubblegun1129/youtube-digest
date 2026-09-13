@@ -79,9 +79,11 @@ test("side panel stays YouTube-only while page translation uses the content scri
 
   assert.match(
     background,
-    /enabled:\s*isYouTube/,
+    /enabled:\s*isYouTubeUrl\(url\)/,
     "the extension icon must not open the side panel on ordinary websites",
   );
+  assert.match(background, /function syncPanelForAllTabs\(/);
+  assert.match(background, /chrome\.runtime\.onStartup\.addListener\(syncPanelForAllTabs\)/);
   assert.match(
     sidepanel,
     /function handleFrontTab\(tab\) \{[\s\S]*?startsWith\("https:\/\/www\.youtube\.com"\)[\s\S]*?window\.close\(\);/,

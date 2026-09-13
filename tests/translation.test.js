@@ -106,11 +106,16 @@ function loadBackgroundHelpers({
       },
       runtime: {
         onInstalled: listeners,
+        onStartup: listeners,
         onMessage: listeners,
         openOptionsPage() {},
         getURL: (resourcePath) => `chrome-extension://test/${resourcePath}`,
       },
-      tabs: { onUpdated: listeners, onActivated: listeners },
+      tabs: {
+        onUpdated: listeners,
+        onActivated: listeners,
+        query: async () => [],
+      },
     },
     YTD_SETTINGS: {
       STORAGE_KEY: "ytd_settings",

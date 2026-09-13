@@ -255,7 +255,10 @@ Promise.resolve(
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.runtime.openOptionsPage();
+  syncPanelForAllTabs();
 });
+
+chrome.runtime.onStartup.addListener(syncPanelForAllTabs);
 
 /**
  * Keep the side panel scoped to YouTube tabs only.
@@ -273,13 +276,29 @@ chrome.runtime.onInstalled.addListener(({ reason }) => {
  * The original code only handled onUpdated, which is why the panel stayed
  * visible when switching to an already-loaded non-YouTube tab.
  */
+function isYouTubeUrl(url) {
+  return (url || "").startsWith("https://www.youtube.com");
+}
+
 function updatePanelForTab(tabId, url) {
-  const isYouTube = (url || "").startsWith("https://www.youtube.com");
   // setOptions can reject if the tab just closed — ignore that harmlessly.
   chrome.sidePanel
-    .setOptions({ tabId, path: "sidepanel.html", enabled: isYouTube })
+    .setOptions({ tabId, path: "sidepanel.html", enabled: isYouTubeUrl(url) })
     .catch(() => {});
 }
+
+async function syncPanelForAllTabs() {
+  try {
+    const tabs = await chrome.tabs.query({});
+    for (const tab of tabs) {
+      if (Number.isInteger(tab.id)) updatePanelForTab(tab.id, tab.url);
+    }
+  } catch (_error) {
+    // Tabs can be unavailable while Chrome is shutting the worker down.
+  }
+}
+
+syncPanelForAllTabs();
 
 // A tab navigated to a new URL.
 chrome.tabs.onUpdated.addListener((tabId, changeInfo) => {
