@@ -32,11 +32,13 @@ const debugLog = (...args) => {
 
 // Prevent the YouTube content script from reading API keys or cached data.
 // Side panel, options, and service-worker contexts remain trusted.
-chrome.storage.local
-  .setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" })
-  .catch((error) =>
+if (typeof chrome.storage?.local?.setAccessLevel === "function") {
+  Promise.resolve(
+    chrome.storage.local.setAccessLevel({ accessLevel: "TRUSTED_CONTEXTS" }),
+  ).catch((error) =>
     console.warn("[YouTube Digest] Could not restrict storage access:", error),
   );
+}
 
 async function getSettings() {
   const stored = await chrome.storage.local.get(YTD_SETTINGS.STORAGE_KEY);
@@ -245,32 +247,39 @@ async function readBoundedAiResponse(response, onActivity) {
  * enable/disable per tab is handled by updatePanelForTab(), and the Digest
  * button on YouTube pages opens the panel via the openSidePanel message.
  */
-chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true });
+Promise.resolve(
+  chrome.sidePanel.setPanelBehavior({ openPanelOnActionClick: true }),
+).catch((error) =>
+  console.warn("[YouTube Digest] Could not set side panel behavior:", error),
+);
 
 chrome.runtime.onInstalled.addListener(({ reason }) => {
   if (reason === "install") chrome.runtime.openOptionsPage();
 });
 
 /**
- * Keep the side panel scoped to YouTube tabs only.
+ * Keep the side panel available on ordinary web pages as well as YouTube.
  *
- * Chrome side panels are "global" by default: once opened, the panel follows
- * you to every tab. To make YouTube Digest behave like a YouTube-only tool, we
- * enable the panel on YouTube tabs and disable it everywhere else. Disabling
- * on a tab makes Chrome hide/close the panel for that tab, so it never lingers
- * on a new tab or some other website.
+ * Page selection translation runs on http(s) sites, so clicking the extension
+ * icon must still open the panel there. Chrome:// and other internal pages
+ * stay disabled so the panel does not linger on the New Tab or Extensions UI.
  *
  * We have to react to BOTH things that can change "what tab you're looking at":
  *   - onUpdated: the current tab navigates to a new URL
  *   - onActivated: you switch to (or open) a different tab
- * The original code only handled onUpdated, which is why the panel stayed
- * visible when switching to an already-loaded non-YouTube tab.
  */
+function isHttpPageUrl(url) {
+  return /^(https?:)\/\//i.test(url || "");
+}
+
 function updatePanelForTab(tabId, url) {
-  const isYouTube = (url || "").startsWith("https://www.youtube.com");
   // setOptions can reject if the tab just closed — ignore that harmlessly.
   chrome.sidePanel
-    .setOptions({ tabId, path: "sidepanel.html", enabled: isYouTube })
+    .setOptions({
+      tabId,
+      path: "sidepanel.html",
+      enabled: isHttpPageUrl(url),
+    })
     .catch(() => {});
 }
 

@@ -16,6 +16,11 @@ test("ordinary web pages receive the selection translation content script", () =
   assert.deepEqual(script.matches, ["http://*/*", "https://*/*"]);
   assert.deepEqual(script.exclude_matches, ["https://www.youtube.com/*"]);
   assert.equal(script.run_at, "document_idle");
+  assert.ok(
+    manifest.host_permissions.includes("http://*/*") &&
+      manifest.host_permissions.includes("https://*/*"),
+    "content script match patterns must be covered by host_permissions so Chrome can load the extension",
+  );
 });
 
 test("page translation script sends selected text to the translation action", () => {
@@ -66,4 +71,41 @@ test("page translation guards against missing chrome.runtime context", () => {
     source,
     /async function translatePageSelection\(text\) \{[\s\S]*?if \(!chrome\?\.runtime\?\.sendMessage\) \{[\s\S]*?throw new Error\("Extension context unavailable[\s\S]*?\);[\s\S]*?\}[\s\S]*?await chrome\.runtime\.sendMessage\(/,
   );
+});
+
+test("side panel stays available on ordinary http(s) tabs", () => {
+  const background = read("background.js");
+  const sidepanel = read("sidepanel.js");
+
+  assert.match(background, /function isHttpPageUrl\(url\)/);
+  assert.match(
+    background,
+    /enabled:\s*isHttpPageUrl\(url\)/,
+    "icon click must open the panel on ordinary websites, not only YouTube",
+  );
+  assert.doesNotMatch(background, /enabled:\s*isYouTube/);
+
+  assert.match(sidepanel, /function isHttpPageUrl\(url\)/);
+  assert.match(
+    sidepanel,
+    /function handleFrontTab\(tab\) \{[\s\S]*?if \(!isHttpPageUrl\(url\)\) \{[\s\S]*?window\.close\(\);/,
+  );
+  assert.match(
+    sidepanel,
+    /if \(!newVideoId\) \{[\s\S]*?showState\("welcome"\);[\s\S]*?return;/,
+  );
+  assert.doesNotMatch(
+    sidepanel,
+    /Panel is a YouTube-only tool — remove itself from non-YouTube tabs/,
+  );
+});
+
+test("side panel startup survives a missing checkConfig response", () => {
+  const source = read("sidepanel.js");
+  assert.match(
+    source,
+    /configStatus = await chrome\.runtime\.sendMessage\(\{\s*action: "checkConfig",\s*\}\)/,
+  );
+  assert.match(source, /if \(!configStatus \|\| configStatus\.error\)/);
+  assert.match(source, /Could not load YouTube Digest/);
 });

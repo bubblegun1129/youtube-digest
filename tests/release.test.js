@@ -16,6 +16,8 @@ test("manifest uses minimized install-time permissions", () => {
   assert.equal(manifest.options_ui.page, "options.html");
   assert.ok(!manifest.permissions.includes("activeTab"));
   assert.ok(manifest.host_permissions.includes("https://api.deepseek.com/*"));
+  assert.ok(manifest.host_permissions.includes("http://*/*"));
+  assert.ok(manifest.host_permissions.includes("https://*/*"));
   assert.equal(Object.hasOwn(manifest, "optional_host_permissions"), false);
   assert.deepEqual(
     manifest.content_scripts.find((item) =>
@@ -29,7 +31,7 @@ test("manifest uses minimized install-time permissions", () => {
     )?.exclude_matches,
     ["https://www.youtube.com/*"],
   );
-  assert.equal(manifest.version, "1.1.5");
+  assert.equal(manifest.version, "1.1.6");
 });
 
 test("Supadata transcript requests are centrally cached and deduplicated", () => {

@@ -95,6 +95,7 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 4. Open **Overview** when you want AI-generated chapters and key quotes.
 5. Select transcript text when you want an AI explanation.
 6. Save a note from the player or a key quote, then revisit it from **Notes**.
+7. On other websites, select text to translate it into Simplified Chinese.
 
 ## What works today
 
@@ -103,6 +104,7 @@ Keys and settings are stored in Chrome's local extension storage on your device.
 - Native subtitle tracks returned by Supadata. YouTube Digest prefers English when available, but may show another native language.
 - Original, Simplified Chinese, and aligned bilingual transcript views.
 - AI overviews, selected-text explanations, translation, and automatic note polishing.
+- Selected-text translation into Simplified Chinese on ordinary http and https pages.
 - Local notes and a local cache for recent transcript and digest results.
 - DeepSeek V4 Flash for all published AI features. Other providers require a local code adaptation and are not supported by this published version.
 
