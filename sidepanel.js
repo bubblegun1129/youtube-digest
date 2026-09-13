@@ -610,6 +610,19 @@ function extractVideoId(url) {
 // DIGEST PIPELINE
 // ============================================================
 
+const CHINESE_SCRIPT_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+/**
+ * Cheap local language probe used before any paid API call. If the title or
+ * channel name contains CJK characters the video is almost certainly
+ * Chinese-language, so the digest pipeline skips the transcript fetch (and
+ * therefore translation) to save Supadata and AI quota. Notes still work.
+ */
+function isLikelyChineseVideo(title, channelName) {
+  const text = `${title || ""} ${channelName || ""}`.replace(/\s+/g, "");
+  return CHINESE_SCRIPT_PATTERN.test(text);
+}
+
 async function startDigest(videoId, videoUrl) {
   // Check if we already have this video loaded in memory
   if (videoId === currentVideoId && currentTranscript) {
@@ -692,6 +705,17 @@ async function startDigest(videoId, videoUrl) {
   isAnalysisLoading = false;
 
   renderVideoInfo();
+
+  // Chinese-language videos: skip the transcript fetch and translation to
+  // save Supadata and AI quota. The panel explains why instead of showing a
+  // transcript error; notes and the video info still work.
+  if (isLikelyChineseVideo(currentVideoTitle, currentChannelName)) {
+    showError(
+      "中文视频已跳过",
+      "检测到该视频为中文，已跳过字幕拉取与翻译以节省 API 额度。",
+    );
+    return;
+  }
 
   showState("loading");
   updateLoading("Fetching transcript", "");
@@ -2372,6 +2396,16 @@ function ensureMissingTranscriptTranslations() {
 async function translateTranscript() {
   const segments = getActiveTranscriptSegments();
   if (!segments.length || currentTranscriptMode === "original") return;
+
+  // Chinese transcripts need no translation. This second guard covers
+  // transcripts that already exist in cache (fetched before the language
+  // probe shipped): skip the DeepSeek batches for those too.
+  if (
+    isLikelyChineseVideo(currentVideoTitle, currentChannelName) ||
+    /^zh/i.test(String(currentTranscriptLanguage || ""))
+  ) {
+    return;
+  }
 
   translationGeneration += 1;
   const generation = translationGeneration;

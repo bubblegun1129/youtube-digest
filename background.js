@@ -1289,6 +1289,19 @@ async function handleGetVideoInfo(tabId) {
 // NOTE MANAGEMENT
 // ============================================================
 
+const CHINESE_SCRIPT_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+/**
+ * Cheap local language probe used before any paid API call. If the title or
+ * channel name contains CJK characters the video is almost certainly
+ * Chinese-language, so transcript fetches triggered by note saving skip the
+ * Supadata call; the note is still saved with the video title instead.
+ */
+function isLikelyChineseVideo(title, channelName) {
+  const text = `${title || ""} ${channelName || ""}`.replace(/\s+/g, "");
+  return CHINESE_SCRIPT_PATTERN.test(text);
+}
+
 /**
  * Saves a note at the current timestamp.
  * Fetches the transcript if needed, finds the relevant line, and cleans it up.
@@ -1318,8 +1331,9 @@ async function handleSaveNote(
       debugLog("[YouTube Digest] No cached transcript, fetching...");
     }
 
-    // If no cached transcript, fetch it
-    if (!transcript) {
+    // If no cached transcript, fetch it. Chinese-language videos skip the
+    // Supadata call entirely — the note is still saved with the video title.
+    if (!transcript && !isLikelyChineseVideo(videoTitle, channelName)) {
       const transcriptResult = await handleFetchTranscript(videoId);
       if (!transcriptResult.success) {
         return { success: false, error: "Could not fetch transcript" };
@@ -1335,7 +1349,7 @@ async function handleSaveNote(
     let beforeLine = null; // a few sentences before
     let afterLine = null; // a few sentences after
 
-    for (let i = 0; i < transcript.length; i++) {
+    for (let i = 0; i < (transcript?.length || 0); i++) {
       const line = transcript[i];
       if (
         line.start <= safeTimestamp &&
@@ -1373,7 +1387,7 @@ async function handleSaveNote(
       }
     }
 
-    if (!matchedLine) {
+    if (!matchedLine && transcript) {
       // Fallback: use the last line if timestamp is beyond transcript
       matchedLine = transcript[transcript.length - 1];
       matchedIndex = transcript.length - 1;
@@ -1393,19 +1407,30 @@ async function handleSaveNote(
       }
     }
 
-    // Clean up the text with DeepSeek.
-    const cleanedText = await cleanupNoteText(
-      matchedLine.text,
-      beforeLine,
-      afterLine,
-      contextLines.join(" "),
-      videoTitle,
-    );
-
     // Format timestamp as MM:SS
     const minutes = Math.floor(safeTimestamp / 60);
     const seconds = safeTimestamp % 60;
     const formattedTimestamp = `${minutes}:${String(seconds).padStart(2, "0")}`;
+
+    let cleanedText;
+    let rawText = "";
+    if (matchedLine) {
+      // Clean up the text with DeepSeek.
+      cleanedText = await cleanupNoteText(
+        matchedLine.text,
+        beforeLine,
+        afterLine,
+        contextLines.join(" "),
+        videoTitle,
+      );
+      rawText = matchedLine.text;
+    } else {
+      // Chinese-language video (or unavailable transcript): title-only note,
+      // so no Supadata or DeepSeek quota is spent.
+      cleanedText = `[${formattedTimestamp}] ${
+        typeof videoTitle === "string" ? videoTitle : "Untitled Video"
+      }`;
+    }
 
     // Create timestamped URL
     const timestampedUrl = `${canonicalVideoUrl}&t=${safeTimestamp}s`;
@@ -1424,7 +1449,7 @@ async function handleSaveNote(
       timestampSeconds: safeTimestamp,
       timestampedUrl: timestampedUrl,
       text: cleanedText,
-      rawText: matchedLine.text,
+      rawText: rawText,
       createdAt: Date.now(),
     };
 

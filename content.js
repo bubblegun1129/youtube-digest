@@ -929,6 +929,19 @@ function findCaptionsHost() {
   );
 }
 
+const CHINESE_SCRIPT_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
+
+/**
+ * Cheap local language probe used before any paid API call. If the title or
+ * channel name contains CJK characters the video is almost certainly
+ * Chinese-language, so the bilingual overlay skips the transcript fetch and
+ * translation entirely to save Supadata and AI quota.
+ */
+function isLikelyChineseVideo(title, channelName) {
+  const text = `${title || ""} ${channelName || ""}`.replace(/\s+/g, "");
+  return CHINESE_SCRIPT_PATTERN.test(text);
+}
+
 const CAPTIONS_SEGMENT_LIMITS = Object.freeze({
   minChars: 60,
   idealChars: 180,
@@ -1324,6 +1337,15 @@ async function toggleCaptions() {
 async function loadBilingualCaptions() {
   const videoId = new URLSearchParams(window.location.search).get("v");
   if (!videoId) return;
+
+  // Chinese-language videos need no bilingual overlay: skip the transcript
+  // fetch and translation entirely to save Supadata and AI quota. This is a
+  // free local probe (title + channel name) that runs before any API call.
+  const videoInfo = extractVideoInfo();
+  if (isLikelyChineseVideo(videoInfo.title, videoInfo.channelName)) {
+    showCaptionsError("该视频为中文，已跳过字幕拉取与翻译。");
+    return;
+  }
 
   // A previous attempt for this video failed (no captions). Don't re-fetch —
   // the background caches the failure too, so re-requesting would just waste
