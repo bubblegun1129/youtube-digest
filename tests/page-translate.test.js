@@ -2,6 +2,7 @@ const test = require("node:test");
 const assert = require("node:assert/strict");
 const fs = require("node:fs");
 const path = require("node:path");
+const vm = require("node:vm");
 
 const root = path.resolve(__dirname, "..");
 const read = (file) => fs.readFileSync(path.join(root, file), "utf8");
@@ -22,11 +23,66 @@ test("page translation script sends selected text to the translation action", ()
   const source = read("page-translate.js");
 
   assert.match(source, /window\.getSelection\(\)/);
+  assert.match(source, /isTranslatablePageSelection\(text\)/);
   assert.match(source, /action: "translateContent"/);
   assert.match(source, /contentType: "selectedText"/);
   assert.match(source, /targetLanguage: "zh"/);
   assert.match(source, /PAGE_TRANSLATE_MAX_SELECTION_CHARS = 4000/);
+  assert.doesNotMatch(source, /\\p\{/);
   assert.doesNotMatch(source, /youtube\.com/);
+});
+
+test("page translation ignores Chinese, links, and non-text selections", () => {
+  const sandbox = {
+    chrome: { runtime: { sendMessage() {} } },
+    document: {
+      addEventListener() {},
+      createElement() {
+        return {
+          addEventListener() {},
+          attachShadow() {
+            return {
+              getElementById() {
+                return { className: "", textContent: "" };
+              },
+            };
+          },
+          style: {},
+        };
+      },
+      documentElement: { appendChild() {} },
+    },
+    window: {
+      addEventListener() {},
+      getSelection() {
+        return null;
+      },
+      innerHeight: 800,
+      innerWidth: 1200,
+    },
+    URL,
+    setTimeout() {},
+    clearTimeout() {},
+  };
+
+  vm.createContext(sandbox);
+  vm.runInContext(read("page-translate.js"), sandbox);
+
+  const accepts = sandbox.isTranslatablePageSelection;
+  assert.equal(typeof accepts, "function");
+
+  assert.equal(accepts("This is a useful English sentence."), true);
+  assert.equal(accepts("OpenAI API pricing"), true);
+  assert.equal(accepts("This English sentence was selected 中文"), true);
+  assert.equal(accepts("これは日本語の文章です"), true);
+  assert.equal(accepts("这是一段中文"), false);
+  assert.equal(accepts("中文内容很多很多 OpenAI"), false);
+  assert.equal(accepts("https://example.com/docs"), false);
+  assert.equal(accepts("www.example.com/path?q=1"), false);
+  assert.equal(accepts("support@example.com"), false);
+  assert.equal(accepts("12345"), false);
+  assert.equal(accepts("— / + ="), false);
+  assert.equal(accepts("A"), false);
 });
 
 test("page translation debounces rapid selections into a single request", () => {
@@ -64,6 +120,6 @@ test("page translation guards against missing chrome.runtime context", () => {
   // Guard appears inside translatePageSelection, before any sendMessage call.
   assert.match(
     source,
-    /async function translatePageSelection\(text\) \{[\s\S]*?if \(!chrome\?\.runtime\?\.sendMessage\) \{[\s\S]*?throw new Error\("Extension context unavailable[\s\S]*?\);[\s\S]*?\}[\s\S]*?await chrome\.runtime\.sendMessage\(/,
+    /async function translatePageSelection\(text\) \{[\s\S]*?typeof chrome === "undefined"[\s\S]*?throw new Error\("Extension context unavailable[\s\S]*?\);[\s\S]*?\}[\s\S]*?await chrome\.runtime\.sendMessage\(/,
   );
 });

@@ -10,6 +10,39 @@ const debugLog = (...args) => {
   if (DEBUG) console.log(...args);
 };
 
+// chrome.runtime can briefly disappear (extension reload, sandboxed contexts,
+// orphaned side panel, etc.) and chrome.tabs disappears with it. Without
+// guards, every sendMessage call throws the raw
+// "Cannot read properties of undefined (reading 'sendMessage')" — and that
+// exact string can bubble into the welcome / error / loading UI. These
+// wrappers convert both the missing-API case and runtime rejections into a
+// friendly `{ error }` envelope so callers can show actionable text.
+async function runtimeSend(message) {
+  if (!chrome?.runtime?.sendMessage) {
+    return {
+      error: "Extension context unavailable. Try reloading the side panel.",
+    };
+  }
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    return { error: error?.message || "Message failed." };
+  }
+}
+
+async function tabsSend(tabId, message) {
+  if (!chrome?.tabs?.sendMessage) {
+    return {
+      error: "Extension context unavailable. Try reloading the side panel.",
+    };
+  }
+  try {
+    return await chrome.tabs.sendMessage(tabId, message);
+  } catch (error) {
+    return { error: error?.message || "Message failed." };
+  }
+}
+
 // ============================================================
 // STATE
 // ============================================================
@@ -71,7 +104,19 @@ function sendTranslationMessage(message) {
 
     let messagePromise;
     try {
-      messagePromise = chrome.runtime.sendMessage(message);
+      // chrome.runtime can be briefly unavailable (side panel reload, orphan
+      // context, etc.). Without this guard, a stale context produces the raw
+      // "Cannot read properties of undefined (reading 'sendMessage')" error,
+      // which then leaks into the UI through `runtimeSend`'s envelope.
+      const api = chrome?.runtime?.sendMessage;
+      if (!api) {
+        finish(
+          reject,
+          new Error("Extension context unavailable. Try reloading the page."),
+        );
+        return;
+      }
+      messagePromise = api(message);
     } catch (error) {
       finish(reject, error);
       return;
@@ -241,9 +286,14 @@ document.addEventListener("DOMContentLoaded", async () => {
   await restoreTranscriptMode();
   await evictOldCacheEntries(20);
 
-  const configStatus = await chrome.runtime.sendMessage({
+  const configStatus = await runtimeSend({
     action: "checkConfig",
   });
+
+  if (configStatus?.error) {
+    showConfigError({ hasSupadataKey: false, hasAiKey: false });
+    return;
+  }
 
   if (!configStatus.hasSupadataKey || !configStatus.hasAiKey) {
     showConfigError(configStatus);
@@ -387,7 +437,7 @@ function setupEventListeners() {
   });
 
   document.getElementById("settingsBtn")?.addEventListener("click", () => {
-    chrome.runtime.sendMessage({ action: "openOptions" });
+    void runtimeSend({ action: "openOptions" });
   });
 
   // Transcript actions
@@ -496,16 +546,20 @@ async function checkCurrentTab() {
       currentVideoUrl = tab.url;
 
       try {
-        const result = await chrome.runtime.sendMessage({
+        const result = await runtimeSend({
           action: "getVideoInfo",
           tabId: youtubeTabId,
         });
-        debugLog("[YouTube Digest Panel] getVideoInfo result:", result);
-        if (result) {
+        if (result && !result.error) {
           currentVideoTitle = result.title || "";
           currentChannelName = result.channelName || "";
           currentVideoDescription = result.description || "";
           currentVideoDuration = result.duration || 0;
+        } else if (result?.error) {
+          debugLog(
+            "[YouTube Digest Panel] getVideoInfo unavailable:",
+            result.error,
+          );
         }
       } catch (e) {
         console.error("[YouTube Digest Panel] getVideoInfo error:", e);
@@ -640,10 +694,18 @@ async function startDigest(videoId, videoUrl) {
   showState("loading");
   updateLoading("Fetching transcript", "");
 
-  const transcriptResult = await chrome.runtime.sendMessage({
+  const transcriptResult = await runtimeSend({
     action: "fetchTranscript",
     videoId: videoId,
   });
+
+  if (transcriptResult?.error && !transcriptResult.transcript) {
+    showError(
+      "Could not fetch transcript",
+      transcriptResult.error,
+    );
+    return;
+  }
 
   if (!transcriptResult.success) {
     if (transcriptResult.error === "NO_SUPADATA_KEY") {
@@ -798,7 +860,7 @@ async function saveQuoteAsNote(quote, btn) {
   btn.disabled = true;
 
   try {
-    const result = await chrome.runtime.sendMessage({
+    const result = await runtimeSend({
       action: "saveNote",
       videoId: currentVideoId,
       timestamp: quote.timestampSeconds,
@@ -806,7 +868,7 @@ async function saveQuoteAsNote(quote, btn) {
       channelName: currentChannelName,
     });
 
-    if (result.success) {
+    if (result?.success) {
       btn.textContent = "✓ Saved";
       setTimeout(() => {
         btn.textContent = originalText;
@@ -815,7 +877,10 @@ async function saveQuoteAsNote(quote, btn) {
       // Refresh notes list if on Notes tab
       loadNotes(currentVideoId);
     } else {
-      console.error("[YouTube Digest] Save quote as note failed:", result.error);
+      console.error(
+        "[YouTube Digest] Save quote as note failed:",
+        result?.error || "Unknown error",
+      );
       btn.textContent = "Error";
       setTimeout(() => {
         btn.textContent = originalText;
@@ -987,16 +1052,26 @@ function showError(title, message) {
 }
 
 function showConfigError(configStatus) {
+  const safeStatus = configStatus || {};
   const missingKeys = [];
-  if (!configStatus.hasSupadataKey) missingKeys.push("Supadata");
-  if (!configStatus.hasAiKey) missingKeys.push("AI provider");
+  if (!safeStatus.hasSupadataKey) missingKeys.push("Supadata");
+  if (!safeStatus.hasAiKey) missingKeys.push("AI provider");
 
   showState("error");
+  if (safeStatus.error) {
+    document.getElementById("errorTitle").textContent = "Extension Reload Needed";
+    document.getElementById("errorMessage").textContent = safeStatus.error;
+    document.getElementById("errorBtn").textContent = "Try Again";
+    errorAction = null;
+    return;
+  }
   document.getElementById("errorTitle").textContent = "API Keys Missing";
   document.getElementById("errorMessage").textContent =
     `Add your ${missingKeys.join(" and ")} API key${missingKeys.length === 1 ? "" : "s"} in YouTube Digest Settings.`;
   document.getElementById("errorBtn").textContent = "Open Settings";
-  errorAction = () => chrome.runtime.sendMessage({ action: "openOptions" });
+  errorAction = () => {
+    void runtimeSend({ action: "openOptions" });
+  };
 }
 
 // ============================================================
@@ -1048,7 +1123,7 @@ async function triggerAnalysis() {
       '<div class="quote-item" style="color: var(--text-muted); border-left-color: var(--border);">Loading quotes...</div>';
 
   try {
-    const analysisResult = await chrome.runtime.sendMessage({
+    const analysisResult = await runtimeSend({
       action: "analyzeTranscript",
       transcriptText: currentTranscriptTimestamped,
       videoTitle: currentVideoTitle,
@@ -1057,9 +1132,13 @@ async function triggerAnalysis() {
       videoDuration: currentVideoDuration,
     });
 
-    if (!analysisResult.success) {
+    if (!analysisResult?.success) {
+      const message =
+        analysisResult?.error ||
+        analysisResult?.message ||
+        "Unknown error";
       if (chapterList)
-        chapterList.innerHTML = `<li class="chapter-item" style="color: var(--accent); border: none;">Analysis failed: ${escapeHtml(analysisResult.error || "Unknown error")}</li>`;
+        chapterList.innerHTML = `<li class="chapter-item" style="color: var(--accent); border: none;">Analysis failed: ${escapeHtml(message)}</li>`;
       isAnalysisLoading = false;
       return;
     }
@@ -1098,25 +1177,28 @@ async function seekTo(seconds) {
   try {
     // Try direct messaging to the stored YouTube tab first (fastest/reliable)
     if (youtubeTabId) {
-      try {
-        await chrome.tabs.sendMessage(youtubeTabId, payload);
+      const direct = await tabsSend(youtubeTabId, payload);
+      if (!direct?.error) {
         debugLog("[YouTube Digest Panel] seekTo direct success");
         return;
-      } catch (directErr) {
-        debugLog(
-          "[YouTube Digest Panel] Direct seekTo failed, falling back to relay:",
-          directErr.message,
-        );
       }
+      debugLog(
+        "[YouTube Digest Panel] Direct seekTo failed, falling back to relay:",
+        direct.error,
+      );
     }
 
     // Fallback: route through background script
-    const result = await chrome.runtime.sendMessage({
+    const result = await runtimeSend({
       action: "relayToContent",
       tabId: youtubeTabId,
       payload,
     });
-    debugLog("[YouTube Digest Panel] seekTo relay result:", result);
+    if (result?.error) {
+      console.error("[YouTube Digest Panel] seekTo relay error:", result.error);
+    } else {
+      debugLog("[YouTube Digest Panel] seekTo relay result:", result);
+    }
   } catch (error) {
     console.error("[YouTube Digest Panel] seekTo error:", error);
   }
@@ -1143,7 +1225,7 @@ async function highlightMomentsOnPage(moments) {
 
   try {
     // Route through background script for reliable message passing
-    await chrome.runtime.sendMessage({
+    const result = await runtimeSend({
       action: "relayToContent",
       tabId: youtubeTabId,
       payload: {
@@ -1152,6 +1234,9 @@ async function highlightMomentsOnPage(moments) {
         videoDuration: currentVideoDuration,
       },
     });
+    if (result?.error) {
+      console.error("Highlight error:", result.error);
+    }
   } catch (error) {
     console.error("Highlight error:", error);
   }
@@ -1356,7 +1441,7 @@ async function showExplanation(selectedText) {
 
   // Fetch explanation
   try {
-    const result = await chrome.runtime.sendMessage({
+    const result = await runtimeSend({
       action: "explainSelection",
       selectedText: selectedText,
       transcriptContext: transcriptContext,
@@ -1364,10 +1449,12 @@ async function showExplanation(selectedText) {
     });
 
     const contentDiv = document.getElementById("explanationContent");
-    if (result.success) {
+    if (result?.success) {
       contentDiv.innerHTML = `<div class="explain-text">${escapeHtml(result.explanation).replace(/\n\n/g, "</p><p>").replace(/\n/g, "<br>")}</div>`;
     } else {
-      contentDiv.innerHTML = `<div class="explain-error">Failed to get explanation: ${escapeHtml(result.error)}</div>`;
+      const message =
+        result?.error || result?.message || "Unknown error";
+      contentDiv.innerHTML = `<div class="explain-error">Failed to get explanation: ${escapeHtml(message)}</div>`;
     }
   } catch (error) {
     const contentDiv = document.getElementById("explanationContent");
@@ -1527,10 +1614,15 @@ async function updateCache() {
  */
 async function loadNotes(videoId) {
   try {
-    const result = await chrome.runtime.sendMessage({
+    const result = await runtimeSend({
       action: "getNotes",
       videoId: videoId,
     });
+
+    if (result?.error) {
+      console.error("[YouTube Digest Panel] getNotes error:", result.error);
+      return;
+    }
 
     if (result.success) {
       renderNotes(result.notes, videoId);
@@ -1638,10 +1730,13 @@ function renderNotes(notes, filteredVideoId) {
  */
 async function deleteNote(noteId) {
   try {
-    await chrome.runtime.sendMessage({
+    const result = await runtimeSend({
       action: "deleteNote",
       noteId: noteId,
     });
+    if (result?.error) {
+      console.error("[YouTube Digest Panel] deleteNote error:", result.error);
+    }
   } catch (error) {
     console.error("[YouTube Digest Panel] Delete note error:", error);
   }
@@ -1748,18 +1843,23 @@ async function getPlaybackState() {
   const payload = { action: "getCurrentTime" };
 
   if (Number.isInteger(youtubeTabId)) {
-    try {
-      return await chrome.tabs.sendMessage(youtubeTabId, payload);
-    } catch (error) {
-      debugLog("[YouTube Digest Panel] Direct playback lookup failed:", error);
-    }
+    const direct = await tabsSend(youtubeTabId, payload);
+    if (!direct?.error) return direct || null;
+    debugLog(
+      "[YouTube Digest Panel] Direct playback lookup unavailable:",
+      direct.error,
+    );
   }
 
-  const result = await chrome.runtime.sendMessage({
+  const result = await runtimeSend({
     action: "relayToContent",
     tabId: youtubeTabId,
     payload,
   });
+  if (result?.error) {
+    debugLog("[YouTube Digest Panel] Relay playback lookup error:", result.error);
+    return null;
+  }
   return result?.success ? result.response : null;
 }
 

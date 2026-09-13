@@ -8,6 +8,12 @@
 const PAGE_TRANSLATE_MAX_SELECTION_CHARS = 4000;
 const PAGE_TRANSLATE_DEBOUNCE_MS = 300;
 const PAGE_TRANSLATE_POPUP_ID = "ytd-page-translate-popup";
+const PAGE_TRANSLATE_MIN_LETTERS = 2;
+const PAGE_TRANSLATE_MAX_CHINESE_LETTER_RATIO = 0.5;
+const PAGE_TRANSLATE_TEXT_LETTER_PATTERN =
+  /[A-Za-z\u00c0-\u024f\u0370-\u03ff\u0400-\u052f\u3040-\u30ff\uac00-\ud7af\u3400-\u9fff\uf900-\ufaff]/g;
+const PAGE_TRANSLATE_CHINESE_LETTER_PATTERN =
+  /[\u3400-\u9fff\uf900-\ufaff]/g;
 
 let pageTranslatePopup = null;
 let pageTranslatePopupContent = null;
@@ -18,6 +24,46 @@ let pageTranslateRequestId = 0;
 const pageTranslateCache = new Map();
 let pageTranslateDebounceTimer = null;
 
+function isTranslatablePageSelection(text) {
+  const normalized = String(text || "").trim();
+  if (!normalized) return false;
+
+  const compact = normalized.replace(/\s+/g, "");
+  if (
+    /^(?:https?:\/\/|www\.)[^\s]+$/i.test(compact) ||
+    /^[^\s@]+@[^\s@]+\.[^\s@]+$/i.test(compact)
+  ) {
+    return false;
+  }
+
+  try {
+    const url = new URL(compact);
+    if (url.protocol === "http:" || url.protocol === "https:") return false;
+  } catch (_error) {
+    // Non-URL selections continue through the text checks below.
+  }
+
+  const withoutUrls = normalized.replace(
+    /\b(?:https?:\/\/|www\.)[^\s<>"']+/gi,
+    "",
+  );
+  const letters = withoutUrls.match(PAGE_TRANSLATE_TEXT_LETTER_PATTERN) || [];
+  if (letters.length < PAGE_TRANSLATE_MIN_LETTERS) return false;
+
+  // Keep the popup quiet for Chinese selections, but do not block a mostly
+  // foreign-language sentence just because the drag captured a little Chinese
+  // UI text around it.
+  const chineseLetters =
+    withoutUrls.match(PAGE_TRANSLATE_CHINESE_LETTER_PATTERN) || [];
+  const nonChineseLetterCount = letters.length - chineseLetters.length;
+  if (nonChineseLetterCount < PAGE_TRANSLATE_MIN_LETTERS) return false;
+
+  return (
+    chineseLetters.length / letters.length <
+    PAGE_TRANSLATE_MAX_CHINESE_LETTER_RATIO
+  );
+}
+
 function getSelectedPageText() {
   const selection = window.getSelection();
   if (!selection || selection.rangeCount === 0 || selection.isCollapsed) {
@@ -26,6 +72,7 @@ function getSelectedPageText() {
 
   const text = selection.toString().trim();
   if (!text) return { text: "", rect: null };
+  if (!isTranslatablePageSelection(text)) return { text: "", rect: null };
 
   const range = selection.getRangeAt(0);
   const rect = range.getBoundingClientRect();
@@ -133,7 +180,7 @@ async function translatePageSelection(text) {
   // contexts, etc.). Without this guard, the raw
   // "Cannot read properties of undefined (reading 'sendMessage')" leaks to
   // the popup and tells the user nothing actionable.
-  if (!chrome?.runtime?.sendMessage) {
+  if (typeof chrome === "undefined" || !chrome.runtime?.sendMessage) {
     throw new Error("Extension context unavailable. Try reloading the page.");
   }
 

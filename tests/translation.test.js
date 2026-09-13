@@ -364,9 +364,12 @@ test("playback tracking keeps a relay fallback when a direct tab is unavailable"
   const js = read("sidepanel.js");
 
   assert.deepEqual(await getPlaybackState(), { currentTime: 42 });
+  // `getPlaybackState` routes both branches through the `runtimeSend` /
+  // `tabsSend` guards, so the literal API name is no longer required here —
+  // what matters is that the relay still targets the selected tab.
   assert.match(
     js,
-    /chrome\.runtime\.sendMessage\(\{[\s\S]*?action: "relayToContent",[\s\S]*?tabId: youtubeTabId,[\s\S]*?payload,/,
+    /(?:chrome\.runtime\.sendMessage|runtimeSend)\(\{[\s\S]*?action: "relayToContent",[\s\S]*?tabId: youtubeTabId,[\s\S]*?payload,/,
     "the relay fallback must keep targeting the selected YouTube tab",
   );
   assert.match(

@@ -438,9 +438,19 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         .then(() => {
           // Broadcast to side panel to start digest (in case it's already open)
           setTimeout(() => {
-            chrome.runtime
-              .sendMessage({ action: "startDigestFromButton", tabId })
-              .catch(() => {});
+            // Side panel may be gone (closed, swapped, orphaned context).
+            // Without the guard, a stale chrome.runtime throws a raw
+            // "Cannot read properties of undefined (reading 'sendMessage')"
+            // that pollutes the service worker logs and bubbles into the UI.
+            if (chrome?.runtime?.sendMessage) {
+              try {
+                chrome.runtime
+                  .sendMessage({ action: "startDigestFromButton", tabId })
+                  .catch(() => {});
+              } catch (_error) {
+                // Broadcast failed; the panel will start its digest on its own.
+              }
+            }
           }, 300);
         })
         .catch((err) => {
@@ -1422,7 +1432,15 @@ async function handleSaveNote(
     await saveNoteToStorage(note);
 
     // Notify side panel to refresh notes list
-    chrome.runtime.sendMessage({ action: "noteSaved", note }).catch(() => {});
+    if (chrome?.runtime?.sendMessage) {
+      try {
+        chrome.runtime
+          .sendMessage({ action: "noteSaved", note })
+          .catch(() => {});
+      } catch (_error) {
+        // Side panel may be closed; nothing to do.
+      }
+    }
 
     return { success: true, note };
   } catch (error) {

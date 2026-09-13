@@ -18,6 +18,30 @@ const debugLog = (...args) => {
   if (DEBUG) console.log(...args);
 };
 
+// chrome.runtime can briefly disappear (extension reload, sandboxed contexts,
+// orphaned content scripts after an update, etc.). Without a guard, every
+// chrome.runtime.sendMessage() call throws the raw
+// "Cannot read properties of undefined (reading 'sendMessage')" — and that
+// exact string then leaks into the captions overlay, the note toast, and the
+// console, telling the user nothing actionable. This wrapper converts both
+// the missing-API case and runtime rejections into a friendly error envelope.
+async function runtimeSend(message) {
+  if (!chrome?.runtime?.sendMessage) {
+    return {
+      success: false,
+      error: "Extension context unavailable. Try reloading the page.",
+    };
+  }
+  try {
+    return await chrome.runtime.sendMessage(message);
+  } catch (error) {
+    return {
+      success: false,
+      error: error?.message || "Message failed.",
+    };
+  }
+}
+
 // ============================================================
 // GLOBAL STATE
 // ============================================================
@@ -306,13 +330,13 @@ function createDigestButton() {
     debugLog("[YouTube Digest] Digest button clicked");
 
     // Send message to background script to open side panel
-    try {
-      const result = await chrome.runtime.sendMessage({
-        action: "openSidePanel",
-      });
+    const result = await runtimeSend({
+      action: "openSidePanel",
+    });
+    if (result?.error) {
+      debugLog("[YouTube Digest] openSidePanel unavailable:", result.error);
+    } else {
       debugLog("[YouTube Digest] openSidePanel response:", result);
-    } catch (err) {
-      console.error("[YouTube Digest] Failed to open side panel:", err);
     }
   });
 
@@ -622,7 +646,7 @@ async function saveCurrentNote() {
   }
 
   try {
-    const result = await chrome.runtime.sendMessage({
+    const result = await runtimeSend({
       action: "saveNote",
       videoId: videoId,
       timestamp: currentTime,
@@ -630,7 +654,7 @@ async function saveCurrentNote() {
       channelName: videoInfo.channelName,
     });
 
-    if (result.success) {
+    if (result?.success) {
       if (noteButton) {
         noteButton.innerHTML =
           '<span style="letter-spacing: 0.2px;">SAVED</span>';
@@ -642,7 +666,10 @@ async function saveCurrentNote() {
         noteButton.innerHTML =
           '<span style="letter-spacing: 0.2px;">ERROR</span>';
       }
-      console.error("[YouTube Digest] Save note error:", result.error);
+      console.error(
+        "[YouTube Digest] Save note error:",
+        result?.error || "Unknown error",
+      );
     }
   } catch (err) {
     if (noteButton) {
@@ -1255,29 +1282,32 @@ function updateCaptionsToggleStyle() {
 
 async function restoreCaptionsPreference() {
   if (!window.location.pathname.includes("/watch")) return;
-  try {
-    const response = await chrome.runtime.sendMessage({
-      action: "getCaptionsPref",
-    });
-    const enabled = !!response?.enabled;
-    ytdCaptionsState.enabled = enabled;
-    updateCaptionsToggleStyle();
-    // loadBilingualCaptions is idempotent per video, so an already-loaded
-    // video just re-reveals and tops up translations.
-    if (enabled) await loadBilingualCaptions();
-  } catch (_error) {
-    // Preference read failed; keep captions off.
+  const response = await runtimeSend({
+    action: "getCaptionsPref",
+  });
+  if (response?.error) {
+    debugLog("[YouTube Digest] getCaptionsPref unavailable:", response.error);
+    return;
   }
+  const enabled = !!response?.enabled;
+  ytdCaptionsState.enabled = enabled;
+  updateCaptionsToggleStyle();
+  // loadBilingualCaptions is idempotent per video, so an already-loaded
+  // video just re-reveals and tops up translations.
+  if (enabled) await loadBilingualCaptions();
 }
 
 async function toggleCaptions() {
   const next = !ytdCaptionsState.enabled;
   ytdCaptionsState.enabled = next;
   updateCaptionsToggleStyle();
-  try {
-    await chrome.runtime.sendMessage({ action: "setCaptionsPref", enabled: next });
-  } catch (_error) {
+  const persisted = await runtimeSend({
+    action: "setCaptionsPref",
+    enabled: next,
+  });
+  if (persisted?.error) {
     // Persisting the preference is best-effort; the current view still works.
+    debugLog("[YouTube Digest] setCaptionsPref unavailable:", persisted.error);
   }
 
   if (next) {
@@ -1323,44 +1353,45 @@ async function loadBilingualCaptions() {
 
   showCaptionsLoading();
 
-  try {
-    const result = await chrome.runtime.sendMessage({
-      action: "fetchTranscript",
-      videoId,
-    });
-    if (generation !== ytdCaptionsState.generation) return;
+  const result = await runtimeSend({
+    action: "fetchTranscript",
+    videoId,
+  });
+  if (generation !== ytdCaptionsState.generation) return;
 
-    if (result?.success && Array.isArray(result.transcript)) {
-      const cleanChunks = result.transcript
-        .filter((chunk) => chunk && typeof chunk.text === "string" && chunk.text.trim())
-        .map((chunk) => ({
-          start: Math.max(0, Math.floor(Number(chunk.start) || 0)),
-          duration: Math.max(0.5, Math.floor(Number(chunk.duration) || 0)),
-          text: chunk.text.replace(/>> ?/g, "").trim(),
-        }));
-      const grouped = groupCaptionsIntoPages(cleanChunks);
-      ytdCaptionsState.pages = grouped.map((segment, index) => ({
-        id: segment.id,
-        start: segment.start,
-        duration: Math.max(
-          1,
-          (grouped[index + 1]?.start ?? segment.start + 5) - segment.start,
-        ),
-        text: segment.text,
+  if (result?.success && Array.isArray(result.transcript)) {
+    const cleanChunks = result.transcript
+      .filter((chunk) => chunk && typeof chunk.text === "string" && chunk.text.trim())
+      .map((chunk) => ({
+        start: Math.max(0, Math.floor(Number(chunk.start) || 0)),
+        duration: Math.max(0.5, Math.floor(Number(chunk.duration) || 0)),
+        text: chunk.text.replace(/>> ?/g, "").trim(),
       }));
-      ytdCaptionsState.translations = new Array(
-        ytdCaptionsState.pages.length,
-      ).fill("");
-      bindCaptionsTimeUpdate();
-      showCaptionsOverlay();
-      handleCaptionsTimeUpdate();
+    const grouped = groupCaptionsIntoPages(cleanChunks);
+    ytdCaptionsState.pages = grouped.map((segment, index) => ({
+      id: segment.id,
+      start: segment.start,
+      duration: Math.max(
+        1,
+        (grouped[index + 1]?.start ?? segment.start + 5) - segment.start,
+      ),
+      text: segment.text,
+    }));
+    ytdCaptionsState.translations = new Array(
+      ytdCaptionsState.pages.length,
+    ).fill("");
+    bindCaptionsTimeUpdate();
+    showCaptionsOverlay();
+    handleCaptionsTimeUpdate();
+  } else {
+    ytdCaptionsState.failedVideoIds.add(videoId);
+    if (result?.error && !result?.transcript) {
+      // Distinguish an extension-context outage from a real "no captions"
+      // outcome — the cached failure is fine to suppress for a day, but an
+      // unavailable context should be surfaced so the user knows to reload.
+      showCaptionsError(result.error);
     } else {
-      ytdCaptionsState.failedVideoIds.add(videoId);
       showCaptionsError(result?.message || "No subtitles available for this video.");
-    }
-  } catch (_error) {
-    if (generation === ytdCaptionsState.generation) {
-      showCaptionsError("Could not load subtitles. Please try again.");
     }
   }
 }
@@ -1489,27 +1520,29 @@ async function processCaptionsQueue() {
         text: ytdCaptionsState.pages[index].text,
       }));
 
-      try {
-        const result = await chrome.runtime.sendMessage({
-          action: "translateContent",
-          content: { segments },
-          contentType: "transcriptBatch",
-          targetLanguage: "zh",
-          videoTitle: ytdCaptionsState.videoTitle || "",
-        });
-        if (generation !== ytdCaptionsState.generation) break;
+      const result = await runtimeSend({
+        action: "translateContent",
+        content: { segments },
+        contentType: "transcriptBatch",
+        targetLanguage: "zh",
+        videoTitle: ytdCaptionsState.videoTitle || "",
+      });
+      if (generation !== ytdCaptionsState.generation) break;
 
-        if (result?.success) {
-          const byId = new Map(
-            (result.translatedContent?.segments || []).map((s) => [s.id, s.text]),
-          );
-          batch.forEach((index, batchIndex) => {
-            const text = byId.get(segments[batchIndex].id);
-            if (text) ytdCaptionsState.translations[index] = text;
-          });
-        }
-      } catch (_error) {
-        // Leave this batch untranslated and show the original text only.
+      if (result?.success) {
+        const byId = new Map(
+          (result.translatedContent?.segments || []).map((s) => [s.id, s.text]),
+        );
+        batch.forEach((index, batchIndex) => {
+          const text = byId.get(segments[batchIndex].id);
+          if (text) ytdCaptionsState.translations[index] = text;
+        });
+      } else if (result?.error) {
+        // Extension context unavailable; stop queueing further batches.
+        debugLog(
+          "[YouTube Digest] Captions translation unavailable:",
+          result.error,
+        );
       }
 
       if (generation !== ytdCaptionsState.generation) break;
