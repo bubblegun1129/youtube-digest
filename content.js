@@ -24,7 +24,8 @@ const debugLog = (...args) => {
 // "Cannot read properties of undefined (reading 'sendMessage')" — and that
 // exact string then leaks into the captions overlay, the note toast, and the
 // console, telling the user nothing actionable. This wrapper converts both
-// the missing-API case and runtime rejections into a friendly error envelope.
+// the missing-API case and runtime rejections into a friendly error envelope
+// so callers can stop retrying instead of re-requesting on every trigger.
 async function runtimeSend(message) {
   if (!chrome?.runtime?.sendMessage) {
     return {
@@ -1384,14 +1385,21 @@ async function loadBilingualCaptions() {
     showCaptionsOverlay();
     handleCaptionsTimeUpdate();
   } else {
+    // Any failure — a genuine "no captions" result or an unavailable
+    // extension context — marks the video failed for this session so later
+    // triggers (SPA navigation, toggling the switch, observer runs) hit the
+    // failedVideoIds short-circuit above instead of re-requesting the
+    // transcript and flashing the loading state again.
     ytdCaptionsState.failedVideoIds.add(videoId);
-    if (result?.error && !result?.transcript) {
-      // Distinguish an extension-context outage from a real "no captions"
-      // outcome — the cached failure is fine to suppress for a day, but an
-      // unavailable context should be surfaced so the user knows to reload.
+    if (result?.message) {
+      // Background answered with a real outcome (no captions, rate limit,
+      // bad key, …) — show its friendly message.
+      showCaptionsError(result.message);
+    } else if (result?.error) {
+      // The runtime itself was unavailable — surface the reload hint.
       showCaptionsError(result.error);
     } else {
-      showCaptionsError(result?.message || "No subtitles available for this video.");
+      showCaptionsError("No subtitles available for this video.");
     }
   }
 }
@@ -1538,11 +1546,14 @@ async function processCaptionsQueue() {
           if (text) ytdCaptionsState.translations[index] = text;
         });
       } else if (result?.error) {
-        // Extension context unavailable; stop queueing further batches.
+        // Extension context unavailable (or the message failed): stop the
+        // queue instead of looping every remaining batch through a dead
+        // runtime. Original text stays visible for this video.
         debugLog(
           "[YouTube Digest] Captions translation unavailable:",
           result.error,
         );
+        break;
       }
 
       if (generation !== ytdCaptionsState.generation) break;

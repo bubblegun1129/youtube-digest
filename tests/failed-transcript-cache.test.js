@@ -85,10 +85,11 @@ test("content script marks caption-less videos so it never re-fetches them", () 
     /async function loadBilingualCaptions\(\) \{[\s\S]*?if \(ytdCaptionsState\.failedVideoIds\.has\(videoId\)\) \{[\s\S]*?showCaptionsError\([\s\S]*?return;[\s\S]*?\}[\s\S]*?if \(ytdCaptionsState\.videoId === videoId && ytdCaptionsState\.pages\.length\)/,
   );
 
-  // The failure branch records the video.
+  // The failure branch records the video (comments may sit between the else
+  // brace and the record call), then shows the friendly message when present.
   assert.match(
     content,
-    /\} else \{\s*ytdCaptionsState\.failedVideoIds\.add\(videoId\);[\s\S]*?showCaptionsError\(result\?\.message/,
+    /\} else \{[\s\S]*?ytdCaptionsState\.failedVideoIds\.add\(videoId\);[\s\S]*?showCaptionsError\(result\.message\)[\s\S]*?} else if \(result\?\.error\) \{/,
   );
 
   // resetCaptionsState clears the set so a fresh navigation can try again.
