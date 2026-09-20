@@ -55,6 +55,7 @@ let currentTranscript = null;
 let currentTranscriptText = null; // Plain text (for display/export)
 let currentTranscriptTimestamped = null; // With timestamps for AI analysis
 let currentTranscriptLanguage = null;
+let currentVideoCaptionLanguages = []; // caption track languages from the page
 let currentVideoTitle = "";
 let currentChannelName = "";
 let currentVideoDescription = "";
@@ -557,6 +558,9 @@ async function checkCurrentTab() {
           currentChannelName = result.channelName || "";
           currentVideoDescription = result.description || "";
           currentVideoDuration = result.duration || 0;
+          currentVideoCaptionLanguages = Array.isArray(result.captionLanguages)
+            ? result.captionLanguages
+            : [];
         } else if (result?.error) {
           debugLog(
             "[YouTube Digest Panel] getVideoInfo unavailable:",
@@ -610,17 +614,24 @@ function extractVideoId(url) {
 // DIGEST PIPELINE
 // ============================================================
 
-const CHINESE_SCRIPT_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
+const ZH_CAPTION_LANGUAGE_PATTERN = /^zh/i;
 
 /**
- * Cheap local language probe used before any paid API call. If the title or
- * channel name contains CJK characters the video is almost certainly
- * Chinese-language, so the digest pipeline skips the transcript fetch (and
- * therefore translation) to save Supadata and AI quota. Notes still work.
+ * Language probe used before any paid API call. A video is treated as
+ * Chinese-language only when EVERY available caption track is Chinese, and
+ * never based on the title or channel name — English-captioned videos with
+ * a Chinese title or channel must still be fetched and translated. When the
+ * caption track list is unavailable the probe returns false (do not skip),
+ * so a missing page state can never misfire and silently drop translation.
  */
-function isLikelyChineseVideo(title, channelName) {
-  const text = `${title || ""} ${channelName || ""}`.replace(/\s+/g, "");
-  return CHINESE_SCRIPT_PATTERN.test(text);
+function hasOnlyChineseCaptionTracks(captionLanguages) {
+  const languages = Array.isArray(captionLanguages)
+    ? captionLanguages.filter(Boolean)
+    : [];
+  if (!languages.length) return false;
+  return languages.every((language) =>
+    ZH_CAPTION_LANGUAGE_PATTERN.test(String(language)),
+  );
 }
 
 async function startDigest(videoId, videoUrl) {
@@ -706,13 +717,16 @@ async function startDigest(videoId, videoUrl) {
 
   renderVideoInfo();
 
-  // Chinese-language videos: skip the transcript fetch and translation to
-  // save Supadata and AI quota. The panel explains why instead of showing a
-  // transcript error; notes and the video info still work.
-  if (isLikelyChineseVideo(currentVideoTitle, currentChannelName)) {
+  // Videos whose caption tracks are all Chinese skip the transcript fetch
+  // and translation to save Supadata and AI quota. The panel explains why
+  // instead of showing a transcript error; notes and the video info still
+  // work. The probe reads YouTube's caption track languages locally — a
+  // Chinese title or channel never causes a skip, so English-captioned
+  // videos are always fetched and translated.
+  if (hasOnlyChineseCaptionTracks(currentVideoCaptionLanguages)) {
     showError(
       "中文视频已跳过",
-      "检测到该视频为中文，已跳过字幕拉取与翻译以节省 API 额度。",
+      "检测到该视频字幕为中文，已跳过字幕拉取与翻译以节省 API 额度。",
     );
     return;
   }
@@ -892,6 +906,7 @@ async function saveQuoteAsNote(quote, btn) {
       timestamp: quote.timestampSeconds,
       videoTitle: currentVideoTitle,
       channelName: currentChannelName,
+      captionLanguages: currentVideoCaptionLanguages,
     });
 
     if (result?.success) {
@@ -2397,11 +2412,13 @@ async function translateTranscript() {
   const segments = getActiveTranscriptSegments();
   if (!segments.length || currentTranscriptMode === "original") return;
 
-  // Chinese transcripts need no translation. This second guard covers
-  // transcripts that already exist in cache (fetched before the language
-  // probe shipped): skip the DeepSeek batches for those too.
+  // Chinese transcripts need no translation. This guard skips the DeepSeek
+  // batches when the page's caption tracks are all Chinese, and also covers
+  // transcripts already in cache whose Supadata-returned language is Chinese
+  // (fetched before the language probe shipped). A Chinese title or channel
+  // never triggers the skip, so English-captioned videos always translate.
   if (
-    isLikelyChineseVideo(currentVideoTitle, currentChannelName) ||
+    hasOnlyChineseCaptionTracks(currentVideoCaptionLanguages) ||
     /^zh/i.test(String(currentTranscriptLanguage || ""))
   ) {
     return;

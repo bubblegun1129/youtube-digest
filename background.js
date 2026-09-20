@@ -340,6 +340,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
       message.timestamp,
       message.videoTitle,
       message.channelName,
+      message.captionLanguages,
     )
       .then(sendResponse)
       .catch((err) => sendResponse({ success: false, error: err.message }));
@@ -551,6 +552,10 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
           // only for fields the player didn't provide.
           if (message.payload?.action === "getVideoInfo") {
             const playerInfo = await getPlayerVideoDetails(tabs[0].id);
+            const captionLanguages =
+              playerInfo?.captionLanguages?.length
+                ? playerInfo.captionLanguages
+                : response?.captionLanguages || [];
             if (playerInfo) {
               response = {
                 title: playerInfo.title || response?.title || "",
@@ -561,6 +566,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
                   playerInfo.description || response?.description || "",
               };
             }
+            response.captionLanguages = captionLanguages;
           }
 
           debugLog("[YouTube Digest BG] Got response from content:", response);
@@ -601,13 +607,22 @@ async function getPlayerVideoDetails(tabId) {
       func: () => {
         try {
           const player = document.getElementById("movie_player");
-          const details = player?.getPlayerResponse?.()?.videoDetails;
+          const playerResponse = player?.getPlayerResponse?.();
+          const details = playerResponse?.videoDetails;
           if (!details) return null;
+          const captionTracks =
+            playerResponse?.captions?.playerCaptionsTracklistRenderer
+              ?.captionTracks;
           return {
             title: details.title || "",
             channelName: details.author || "",
             description: details.shortDescription || "",
             duration: Number(details.lengthSeconds) || 0,
+            captionLanguages: Array.isArray(captionTracks)
+              ? captionTracks
+                  .map((track) => track?.languageCode)
+                  .filter(Boolean)
+              : [],
           };
         } catch (e) {
           return null;
@@ -1262,6 +1277,10 @@ async function handleGetVideoInfo(tabId) {
       action: "getVideoInfo",
     });
     const playerInfo = await getPlayerVideoDetails(tabId);
+    const captionLanguages =
+      playerInfo?.captionLanguages?.length
+        ? playerInfo.captionLanguages
+        : response?.captionLanguages || [];
     if (playerInfo) {
       response = {
         title: playerInfo.title || response?.title || "",
@@ -1270,9 +1289,10 @@ async function handleGetVideoInfo(tabId) {
         description: playerInfo.description || response?.description || "",
       };
     }
+    response.captionLanguages = captionLanguages;
     return response;
   } catch (error) {
-    return { title: "", channelName: "", description: "" };
+    return { title: "", channelName: "", description: "", captionLanguages: [] };
   }
 }
 
@@ -1293,17 +1313,24 @@ async function handleGetVideoInfo(tabId) {
 // NOTE MANAGEMENT
 // ============================================================
 
-const CHINESE_SCRIPT_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
+const ZH_CAPTION_LANGUAGE_PATTERN = /^zh/i;
 
 /**
- * Cheap local language probe used before any paid API call. If the title or
- * channel name contains CJK characters the video is almost certainly
- * Chinese-language, so transcript fetches triggered by note saving skip the
- * Supadata call; the note is still saved with the video title instead.
+ * Language probe used before any paid API call. A video is treated as
+ * Chinese-language only when EVERY available caption track is Chinese, and
+ * never based on the title or channel name — English-captioned videos with
+ * a Chinese title or channel must still be fetched and translated. When the
+ * caption track list is unavailable the probe returns false (do not skip),
+ * so a missing page state can never misfire and silently drop translation.
  */
-function isLikelyChineseVideo(title, channelName) {
-  const text = `${title || ""} ${channelName || ""}`.replace(/\s+/g, "");
-  return CHINESE_SCRIPT_PATTERN.test(text);
+function hasOnlyChineseCaptionTracks(captionLanguages) {
+  const languages = Array.isArray(captionLanguages)
+    ? captionLanguages.filter(Boolean)
+    : [];
+  if (!languages.length) return false;
+  return languages.every((language) =>
+    ZH_CAPTION_LANGUAGE_PATTERN.test(String(language)),
+  );
 }
 
 /**
@@ -1315,6 +1342,7 @@ async function handleSaveNote(
   timestamp,
   videoTitle,
   channelName,
+  captionLanguages,
 ) {
   try {
     const canonicalVideoUrl = YTD_SETTINGS.canonicalYouTubeUrl(videoId);
@@ -1335,9 +1363,11 @@ async function handleSaveNote(
       debugLog("[YouTube Digest] No cached transcript, fetching...");
     }
 
-    // If no cached transcript, fetch it. Chinese-language videos skip the
-    // Supadata call entirely — the note is still saved with the video title.
-    if (!transcript && !isLikelyChineseVideo(videoTitle, channelName)) {
+    // If no cached transcript, fetch it. Videos whose caption tracks are all
+    // Chinese skip the Supadata call entirely — the note is still saved with
+    // the video title instead. A Chinese title or channel never triggers the
+    // skip, so English-captioned videos still get a transcript-backed note.
+    if (!transcript && !hasOnlyChineseCaptionTracks(captionLanguages)) {
       const transcriptResult = await handleFetchTranscript(videoId);
       if (!transcriptResult.success) {
         return { success: false, error: "Could not fetch transcript" };

@@ -173,8 +173,9 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   debugLog("[YouTube Digest Content] Received message:", message.action, message);
 
   if (message.action === "getVideoInfo") {
-    // Read video title and channel name from the page
+    // Read video title, channel name, and caption track languages from page
     const info = extractVideoInfo();
+    info.captionLanguages = getCaptionLanguages();
     debugLog("[YouTube Digest Content] Returning video info:", info);
     sendResponse(info);
     return false; // Synchronous response
@@ -653,6 +654,7 @@ async function saveCurrentNote() {
       timestamp: currentTime,
       videoTitle: videoInfo.title,
       channelName: videoInfo.channelName,
+      captionLanguages: getCaptionLanguages(),
     });
 
     if (result?.success) {
@@ -929,17 +931,67 @@ function findCaptionsHost() {
   );
 }
 
-const CHINESE_SCRIPT_PATTERN = /[\u3400-\u9fff\uf900-\ufaff]/;
+const ZH_CAPTION_LANGUAGE_PATTERN = /^zh/i;
 
 /**
- * Cheap local language probe used before any paid API call. If the title or
- * channel name contains CJK characters the video is almost certainly
- * Chinese-language, so the bilingual overlay skips the transcript fetch and
- * translation entirely to save Supadata and AI quota.
+ * Reads the available caption track languages straight from YouTube's
+ * embedded player response. This is free and local — no API call — and is
+ * the source of truth for whether a video actually has Chinese captions.
+ * Returns [] when the data is not on the page yet.
  */
-function isLikelyChineseVideo(title, channelName) {
-  const text = `${title || ""} ${channelName || ""}`.replace(/\s+/g, "");
-  return CHINESE_SCRIPT_PATTERN.test(text);
+function getCaptionLanguages() {
+  try {
+    const playerResponse = window.ytInitialPlayerResponse;
+    const tracks =
+      playerResponse?.captions?.playerCaptionsTracklistRenderer
+        ?.captionTracks;
+    if (Array.isArray(tracks)) {
+      const languages = tracks
+        .map((track) => track?.languageCode)
+        .filter(Boolean);
+      if (languages.length) return languages;
+    }
+  } catch (_error) {
+    // Fall through to the script-tag probe below.
+  }
+  try {
+    for (const script of document.querySelectorAll("script")) {
+      const text = script?.textContent || "";
+      if (!text.includes("ytInitialPlayerResponse")) continue;
+      const match = text.match(/ytInitialPlayerResponse\s*=\s*(\{.+?\})\s*;?/);
+      if (!match) continue;
+      const parsed = JSON.parse(match[1]);
+      const tracks =
+        parsed?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+      if (Array.isArray(tracks)) {
+        const languages = tracks
+          .map((track) => track?.languageCode)
+          .filter(Boolean);
+        if (languages.length) return languages;
+      }
+    }
+  } catch (_error) {
+    // The embedded JSON is not parseable yet; treat as unknown below.
+  }
+  return [];
+}
+
+/**
+ * Language probe used before any paid API call. A video is treated as
+ * Chinese-language only when EVERY available caption track is Chinese, and
+ * never based on the title or channel name — English-captioned videos with
+ * a Chinese title or channel must still be fetched and translated. When the
+ * caption track list is unavailable the probe returns false (do not skip),
+ * so a missing page state can never misfire and silently drop translation.
+ */
+function hasOnlyChineseCaptionTracks(captionLanguages) {
+  const languages = Array.isArray(captionLanguages)
+    ? captionLanguages.filter(Boolean)
+    : [];
+  if (!languages.length) return false;
+  return languages.every((language) =>
+    ZH_CAPTION_LANGUAGE_PATTERN.test(String(language)),
+  );
 }
 
 const CAPTIONS_SEGMENT_LIMITS = Object.freeze({
@@ -1338,12 +1390,13 @@ async function loadBilingualCaptions() {
   const videoId = new URLSearchParams(window.location.search).get("v");
   if (!videoId) return;
 
-  // Chinese-language videos need no bilingual overlay: skip the transcript
-  // fetch and translation entirely to save Supadata and AI quota. This is a
-  // free local probe (title + channel name) that runs before any API call.
-  const videoInfo = extractVideoInfo();
-  if (isLikelyChineseVideo(videoInfo.title, videoInfo.channelName)) {
-    showCaptionsError("该视频为中文，已跳过字幕拉取与翻译。");
+  // Videos whose caption tracks are all Chinese need no bilingual overlay:
+  // skip the transcript fetch and translation entirely to save Supadata and
+  // AI quota. The probe reads YouTube's own caption track languages locally
+  // (free, no API call) — a Chinese title or channel never causes a skip, so
+  // English-captioned videos are always fetched and translated.
+  if (hasOnlyChineseCaptionTracks(getCaptionLanguages())) {
+    showCaptionsError("该视频字幕为中文，已跳过字幕拉取与翻译。");
     return;
   }
 
